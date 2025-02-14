@@ -62,7 +62,7 @@ def cube_to_6x9(cube):
     return res
 
 
-def generate_single_case(min_scramble=1, max_scramble=25):
+def generate_single_case(min_scramble=3, max_scramble=25):
     """
     生成单条数据，包含:
       - scramble_str
@@ -82,21 +82,17 @@ def generate_single_case(min_scramble=1, max_scramble=25):
     # 4. 记录 "从打乱态 -> 复原态" 的全过程
     #    初始状态(杂乱态) + 每一步应用 solution_ops 之后的状态
     steps = []
-    # (a) 初始打乱态
+
+    # (a) 依次应用 solution_ops, 并记录
+    for move in solution_ops:
+        steps.append((cube_to_6x9(cube), move))
+        cube(move)
+
+    # (b) 最终状态
     steps.append((cube_to_6x9(cube), None))
 
-    # (b) 依次应用 solution_ops, 并记录
-    for move in solution_ops:
-        cube(move)
-        steps.append((cube_to_6x9(cube), move))
-
-    # 把操作列表转换成字符串
-    scramble_str = ' '.join(scramble_ops)
-    solution_str = ' '.join(solution_ops)
 
     data_item = {
-        'scramble': scramble_str,
-        'solution': solution_str,
         'steps': steps  # [(6x9二维数组, move or None), ...]
     }
     return data_item
@@ -108,7 +104,7 @@ def generate_dataset(n=100):
     """
     data_list = []
     for _ in range(n):
-        item = generate_single_case(min_scramble=1, max_scramble=25)
+        item = generate_single_case(min_scramble=8, max_scramble=25)
         data_list.append(item)
     return data_list
 
@@ -118,7 +114,7 @@ if __name__ == "__main__":
     dataset = generate_dataset(n=1000)
 
     # 保存到硬盘 (pickle 仅示例用，万亿级可能需要分块+多进程+分布式)
-    with open("rubik_data.pkl", "wb") as f:
+    with open("rubik_shards/rubik_data.pkl", "wb") as f:
         pickle.dump(dataset, f)
 
     print(f"成功生成 {len(dataset)} 条数据并存储到 rubik_data.pkl")

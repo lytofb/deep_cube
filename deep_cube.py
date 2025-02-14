@@ -111,7 +111,7 @@ if __name__ == "__main__":
     rubik_data_list = generate_rubik_data(n=10)
 
     # 尝试保存到本地 (pickle)
-    filename = "rubik_data.pkl"
+    filename = "rubik_shards/rubik_data.pkl"
     with open(filename, "wb") as f:
         pickle.dump(rubik_data_list, f)
     print(f"数据已保存到 {filename}。")

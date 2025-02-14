@@ -5,7 +5,7 @@ from pycuber.solver import CFOPSolver
 
 if __name__ == "__main__":
     # 尝试保存到本地 (pickle)
-    filename = "rubik_data.pkl"
+    filename = "rubik_shards/rubik_data.pkl"
 
     # 再尝试读取回来看是否成功
     with open(filename, "rb") as f:

@@ -2,7 +2,7 @@
 import torch
 
 # 常见颜色，如果需要可以加更多
-COLOR_CHARS = ['W', 'G', 'R', 'B', 'O', 'Y']
+COLOR_CHARS = ['w', 'g', 'r', 'b', 'o', 'y']
 # 你可以自定义颜色顺序
 
 # 这里我把代码的MOVES_POOL改成了19，应该改动代码的什么地方
@@ -29,11 +29,11 @@ def convert_state_to_tensor(state_6x9, color_to_id=None):
     for face_row in state_6x9:  # face_row is 9-length
         for color_char in face_row:
             # 有些数据里可能是小写 'r', 你可统一处理 to upper()
-            c = color_char.upper()
-            if c not in color_to_id:
+            # c = color_char.upper()
+            if color_char not in color_to_id:
                 # 如果遇到未知颜色，可以抛异常或映射到某个UNK
-                raise ValueError(f"未知颜色: {c}")
-            flat.append(color_to_id[c])
+                raise ValueError(f"未知颜色: {color_char}")
+            flat.append(color_to_id[color_char])
     # flat 长度是 6*9=54
     return torch.tensor(flat, dtype=torch.long)
 
