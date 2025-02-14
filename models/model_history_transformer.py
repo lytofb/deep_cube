@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+from utils import PAD_TOKEN
+
 
 class RubikSeq2SeqTransformer(nn.Module):
     """
@@ -19,7 +21,7 @@ class RubikSeq2SeqTransformer(nn.Module):
                  d_model=128,
                  nhead=4,
                  num_layers=12,
-                 num_moves=18,
+                 num_moves=20,
                  max_seq_len=50):
         """
         Args:
@@ -41,7 +43,7 @@ class RubikSeq2SeqTransformer(nn.Module):
         self.src_pos_embedding = nn.Embedding(max_seq_len, d_model)
 
         # Decoder：对 move 索引进行嵌入，并加上位置编码
-        self.tgt_embedding = nn.Embedding(num_moves, d_model)
+        self.tgt_embedding = nn.Embedding(num_moves, d_model, padding_idx=19)
         self.tgt_pos_embedding = nn.Embedding(max_seq_len, d_model)
 
         # Transformer 模型（包含 Encoder 和 Decoder）
@@ -80,6 +82,7 @@ class RubikSeq2SeqTransformer(nn.Module):
         # 处理 Encoder 输入
         # 1. 将输入维度调整为 (src_seq_len, B, input_dim)
         src = src.permute(1, 0, 2)
+        src = src.float()
         # 2. 线性映射到 d_model
         src = self.src_linear(src)
         # 3. 添加位置编码

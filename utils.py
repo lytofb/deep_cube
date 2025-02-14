@@ -15,6 +15,7 @@ MOVES_POOL = [
 MOVE_TO_IDX = {m: i for i, m in enumerate(MOVES_POOL)}
 IDX_TO_MOVE = {i: m for m, i in MOVE_TO_IDX.items()}
 
+PAD_TOKEN = 18
 
 def convert_state_to_tensor(state_6x9, color_to_id=None):
     """
@@ -41,7 +42,8 @@ def convert_state_to_tensor(state_6x9, color_to_id=None):
 def move_str_to_idx(move_str):
     """把动作字符串 (如 'R','R2','R'') -> 0..17 的整数标签"""
     if move_str not in MOVE_TO_IDX:
-        raise ValueError(f"未知动作: {move_str}")
+        return PAD_TOKEN
+        # raise ValueError(f"未知动作: {move_str}")
     return MOVE_TO_IDX[move_str]
 
 

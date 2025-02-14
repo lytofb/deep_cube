@@ -10,7 +10,7 @@ from torch.profiler import profile, record_function, ProfilerActivity
 from dataset_rubik import RubikDataset, collate_fn
 from models.model_history_transformer import RubikSeq2SeqTransformer
 
-from utils.linear_warmup_cosine_annealing_lr import LinearWarmupCosineAnnealingLR
+from utilsp.linear_warmup_cosine_annealing_lr import LinearWarmupCosineAnnealingLR
 
 
 # 或者 from models.model_cnn import RubikCNN
@@ -34,33 +34,49 @@ def train_one_epoch_old(model, dataloader, optimizer, criterion, device):
 
     return total_loss / len(dataloader.dataset)
 
-def train_one_epoch_history(model, dataloader, optimizer, criterion, device):
+
+def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device):
     """
-    针对使用RubikHistoryTransformer的训练循环：
-    - seqs 形状: (B, seq_len, 55)
-    - labels 形状: (B,)
+    针对使用 RubikSeq2SeqTransformer 的训练循环：
+    - src: 魔方状态序列，形状: (B, src_seq_len, 55)
+    - tgt: 包含目标 move 序列（含起始符）的 token 序列，形状: (B, tgt_seq_len)
+
+    注意：
+      使用 teacher forcing 时，将 decoder 输入设为 tgt[:, :-1]，
+      预测目标为 tgt[:, 1:]。
     """
     model.train()
     total_loss = 0.0
 
-    for seqs, labels in tqdm(dataloader, desc="Training"):
-        # seqs => (B, seq_len, 55)
-        # labels => (B,)
-
-        seqs = seqs.to(device, non_blocking=True)
-        labels = labels.to(device, non_blocking=True)
+    for src, tgt in tqdm(dataloader, desc="Training"):
+        # src: (B, src_seq_len, 55)
+        # tgt: (B, tgt_seq_len)
+        src = src.to(device, non_blocking=True)
+        tgt = tgt.to(device, non_blocking=True)
 
         optimizer.zero_grad()
-        # 前向
-        logits = model(seqs)  #  => (B, num_moves)
-        loss = criterion(logits, labels)
+
+        # 使用 teacher forcing:
+        # decoder 的输入 (不包含最后一个 token)
+        decoder_input = tgt[:, :-1]
+        # 真实目标 (不包含起始符)
+        target_output = tgt[:, 1:]
+
+        # 前向传播：注意模型的 forward 定义为 forward(src, tgt)
+        logits = model(src, decoder_input)  # 输出形状: (B, tgt_seq_len - 1, num_moves)
+
+        # 为计算损失将 logits 展平
+        B, seq_len, num_moves = logits.shape
+        logits = logits.reshape(B * seq_len, num_moves)
+        target_output = target_output.reshape(B * seq_len)
+
+        loss = criterion(logits, target_output)
         loss.backward()
         optimizer.step()
 
-        # 统计Loss
-        total_loss += loss.item() * seqs.size(0)
+        total_loss += loss.item() * src.size(0)
 
-    # 返回平均Loss
+    # 返回整个 epoch 的平均 Loss
     return total_loss / len(dataloader.dataset)
 
 
@@ -72,7 +88,7 @@ def main():
     # train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, collate_fn=collate_fn, num_workers=4)
     train_loader = DataLoader(
         train_dataset,
-        batch_size=1024,
+        batch_size=64,
         shuffle=True,
         collate_fn=collate_fn,
         num_workers=4,
@@ -98,7 +114,7 @@ def main():
     # 4. Training loop
     epochs = 1000
     for epoch in range(epochs):
-        avg_loss = train_one_epoch_history(model, train_loader, optimizer, criterion, device)
+        avg_loss = train_one_epoch_seq2seq(model, train_loader, optimizer, criterion, device)
         scheduler.step()
         current_lr = scheduler.get_last_lr()[0]
         print(f"Epoch {epoch}, Loss={avg_loss:.4f}, LR={current_lr:.6f}")
