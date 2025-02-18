@@ -36,14 +36,6 @@ def train_one_epoch_old(model, dataloader, optimizer, criterion, device):
 
 
 def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device):
-    """
-    针对 RubikSeq2SeqTransformer 的训练循环：
-      - src: 魔方状态序列，形状 (B, src_seq_len, 55)
-      - tgt: 包含目标 move 序列（含 SOS 与 EOS）的 token 序列，形状 (B, tgt_seq_len)
-
-    使用 teacher forcing，将 decoder 输入设为 tgt[:, :-1]，
-    目标标签为 tgt[:, 1:]。
-    """
     model.train()
     total_loss = 0.0
 
@@ -54,17 +46,17 @@ def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device):
 
         optimizer.zero_grad()
 
-        # teacher forcing：decoder 输入为 tgt 的前半部分，目标为后半部分
-        decoder_input = tgt[:, :-1]  # (B, tgt_seq_len-1)，应包含 SOS
-        target_output = tgt[:, 1:]  # (B, tgt_seq_len-1)，真实目标（包含 EOS）
+        # teacher forcing：外部切片
+        decoder_input = tgt[:, :-1]  # (B, tgt_seq_len - 1)
+        target_output = tgt[:, 1:]  # (B, tgt_seq_len - 1)
 
-        # 前向传播，模型的 forward 定义为 forward(src, tgt)
-        logits = model(src, decoder_input)  # (B, tgt_seq_len-1, num_moves)
+        # 前向传播，把 decoder_input 传给模型
+        logits = model(src, decoder_input)  # => (B, tgt_seq_len-1, num_moves)
 
+        # 展平计算损失
         B, seq_len, num_moves = logits.shape
-        # 使用 contiguous().view(-1) 展平 logits 和 target_output
-        logits = logits.contiguous().view(-1, num_moves)
-        target_output = target_output.contiguous().view(-1)
+        logits = logits.reshape(-1, num_moves)  # => (B*(seq_len-1), vocab_size)
+        target_output = target_output.reshape(-1)  # => (B*(seq_len-1))
 
         loss = criterion(logits, target_output)
         loss.backward()
@@ -72,7 +64,6 @@ def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device):
 
         total_loss += loss.item() * src.size(0)
 
-    # 返回整个 epoch 的平均 loss
     return total_loss / len(dataloader.dataset)
 
 
@@ -94,7 +85,8 @@ def main():
     )
 
     # 2. Model
-    model = RubikSeq2SeqTransformer(num_layers=4,d_model=2048)
+    # model = RubikSeq2SeqTransformer(num_layers=4,d_model=2048)
+    model = RubikSeq2SeqTransformer(num_layers=4,d_model=128)
     model = model.to(device)
 
     # 3. Optimizer & Loss

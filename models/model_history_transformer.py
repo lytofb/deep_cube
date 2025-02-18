@@ -67,50 +67,40 @@ class RubikSeq2SeqTransformer(nn.Module):
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
         return mask
 
-    def forward(self, src, tgt):
+    def forward(self, src, tgt_input):
         """
         Args:
-            src: Tensor, shape (B, src_seq_len, input_dim)
-            tgt: Tensor, shape (B, tgt_seq_len)，包含 move 的索引
-
-        Returns:
-            logits: Tensor, shape (B, tgt_seq_len, num_moves)
+            src:       shape (B, src_seq_len, input_dim)
+            tgt_input: shape (B, tgt_seq_len-1)  # 训练循环外部已经截断好
         """
         B, src_seq_len, _ = src.shape
-        B, tgt_seq_len = tgt.shape
+        B, tgt_seq_len_minus1 = tgt_input.shape
 
-        # 处理 Encoder 输入
-        # 1. 将输入维度调整为 (src_seq_len, B, input_dim)
-        src = src.permute(1, 0, 2)
-        src = src.float()
-        # 2. 线性映射到 d_model
+        # ------- Encoder 部分保持不变 -------
+        src = src.permute(1, 0, 2).float()  # => (src_seq_len, B, d_model)
         src = self.src_linear(src)
-        # 3. 添加位置编码
-        # 这一段代码什么意思，我没太弄懂，src_positions为什么要弄成shape为(src_seq_len, 1)
-        # 实际上src_seq_len只是复原到魔方的相对位置，不是绝对位置
-        # 比如在第一条数据中1可能是全局数据中的第10条，而第二条数据中1可能是全局数据中的第5条
-        src_positions = torch.arange(src_seq_len, device=src.device).unsqueeze(1)  # (src_seq_len, 1)
-        src = src + self.src_pos_embedding(src_positions)  # (src_seq_len, B, d_model)
+        src_positions = torch.arange(src_seq_len, device=src.device).unsqueeze(1)
+        src = src + self.src_pos_embedding(src_positions)
 
-        # 处理 Decoder 输入
-        tgt_input = tgt[:, :-1]  # 例如 [SOS, move1, move2, ..., move_{n-1}]
-        tgt_input = tgt_input.permute(1, 0)  # (tgt_seq_len-1, B)
+        # ------- Decoder Embedding -------
+        tgt_input = tgt_input.permute(1, 0)  # => (tgt_seq_len-1, B)
         tgt_emb = self.tgt_embedding(tgt_input)
         tgt_positions = torch.arange(tgt_emb.size(0), device=tgt_emb.device).unsqueeze(1)
         tgt_emb = tgt_emb + self.tgt_pos_embedding(tgt_positions)
 
-        # 生成 decoder 的因果掩码，长度为 tgt_emb 的时间步数 (即 tgt_seq_len-1)
+        # ------- Causal Mask -------
         tgt_mask = self.generate_square_subsequent_mask(tgt_emb.size(0)).to(tgt_emb.device)
 
-        # 调用 Transformer 模型，得到 decoder 的输出
-        # 注意：这里 src_mask、memory_mask、以及 padding mask 可以根据需要进一步补充
-        out = self.transformer(src=src, tgt=tgt_emb, tgt_mask=tgt_mask)
-        # out: (tgt_seq_len, B, d_model)
-
-        # 将输出转换回 (B, tgt_seq_len, d_model)
-        out = out.permute(1, 0, 2)
-        # 投影到 move 词汇表上
-        logits = self.fc_out(out)  # (B, tgt_seq_len, num_moves)
+        # ------- Transformer -------
+        out = self.transformer(
+            src=src,
+            tgt=tgt_emb,
+            tgt_mask=tgt_mask,
+            # src_key_padding_mask=...,   # 可选
+            # tgt_key_padding_mask=...    # 可选
+        )
+        out = out.permute(1, 0, 2)  # => (B, tgt_seq_len-1, d_model)
+        logits = self.fc_out(out)  # => (B, tgt_seq_len-1, num_moves)
         return logits
 
 
