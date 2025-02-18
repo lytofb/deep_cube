@@ -37,38 +37,34 @@ def train_one_epoch_old(model, dataloader, optimizer, criterion, device):
 
 def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device):
     """
-    针对使用 RubikSeq2SeqTransformer 的训练循环：
-    - src: 魔方状态序列，形状: (B, src_seq_len, 55)
-    - tgt: 包含目标 move 序列（含起始符）的 token 序列，形状: (B, tgt_seq_len)
+    针对 RubikSeq2SeqTransformer 的训练循环：
+      - src: 魔方状态序列，形状 (B, src_seq_len, 55)
+      - tgt: 包含目标 move 序列（含 SOS 与 EOS）的 token 序列，形状 (B, tgt_seq_len)
 
-    注意：
-      使用 teacher forcing 时，将 decoder 输入设为 tgt[:, :-1]，
-      预测目标为 tgt[:, 1:]。
+    使用 teacher forcing，将 decoder 输入设为 tgt[:, :-1]，
+    目标标签为 tgt[:, 1:]。
     """
     model.train()
     total_loss = 0.0
 
     for src, tgt in tqdm(dataloader, desc="Training"):
-        # src: (B, src_seq_len, 55)
-        # tgt: (B, tgt_seq_len)
+        # src: (B, src_seq_len, 55)，tgt: (B, tgt_seq_len)
         src = src.to(device, non_blocking=True)
         tgt = tgt.to(device, non_blocking=True)
 
         optimizer.zero_grad()
 
-        # 使用 teacher forcing:
-        # decoder 的输入 (不包含最后一个 token)
-        decoder_input = tgt[:, :-1]
-        # 真实目标 (不包含起始符)
-        target_output = tgt[:, 1:]
+        # teacher forcing：decoder 输入为 tgt 的前半部分，目标为后半部分
+        decoder_input = tgt[:, :-1]  # (B, tgt_seq_len-1)，应包含 SOS
+        target_output = tgt[:, 1:]  # (B, tgt_seq_len-1)，真实目标（包含 EOS）
 
-        # 前向传播：注意模型的 forward 定义为 forward(src, tgt)
-        logits = model(src, decoder_input)  # 输出形状: (B, tgt_seq_len - 1, num_moves)
+        # 前向传播，模型的 forward 定义为 forward(src, tgt)
+        logits = model(src, decoder_input)  # (B, tgt_seq_len-1, num_moves)
 
-        # 为计算损失将 logits 展平
         B, seq_len, num_moves = logits.shape
-        logits = logits.reshape(B * seq_len, num_moves)
-        target_output = target_output.reshape(B * seq_len)
+        # 使用 contiguous().view(-1) 展平 logits 和 target_output
+        logits = logits.contiguous().view(-1, num_moves)
+        target_output = target_output.contiguous().view(-1)
 
         loss = criterion(logits, target_output)
         loss.backward()
@@ -76,7 +72,7 @@ def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device):
 
         total_loss += loss.item() * src.size(0)
 
-    # 返回整个 epoch 的平均 Loss
+    # 返回整个 epoch 的平均 loss
     return total_loss / len(dataloader.dataset)
 
 
@@ -98,17 +94,17 @@ def main():
     )
 
     # 2. Model
-    model = RubikSeq2SeqTransformer(num_layers=24,d_model=256)
+    model = RubikSeq2SeqTransformer(num_layers=4,d_model=2048)
     model = model.to(device)
 
     # 3. Optimizer & Loss
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
     # 新增：使用LinearWarmupCosineAnnealingLR调度器
     # 注意：max_epochs需要大于或等于warmup_epochs
-    warmup_epochs = 5
-    max_epochs = 50  # 根据实际训练的总epoch数设置
+    warmup_epochs = 50
+    max_epochs = 1000  # 根据实际训练的总epoch数设置
     scheduler = LinearWarmupCosineAnnealingLR(optimizer, warmup_epochs=warmup_epochs, max_epochs=max_epochs)
 
     # 4. Training loop
