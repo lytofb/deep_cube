@@ -111,7 +111,7 @@ def generate_dataset(n=100):
 
 if __name__ == "__main__":
     # 测试：生成100条数据
-    dataset = generate_dataset(n=1000)
+    dataset = generate_dataset(n=10000)
 
     # 保存到硬盘 (pickle 仅示例用，万亿级可能需要分块+多进程+分布式)
     with open("rubik_shards/rubik_data.pkl", "wb") as f:

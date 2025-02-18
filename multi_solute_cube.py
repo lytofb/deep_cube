@@ -51,21 +51,20 @@ def generate_single_case(min_scramble=1, max_scramble=25, seed_offset=0):
 
     # 记录打乱态 -> 复原态的每一步
     steps = []
-    steps.append((cube_to_6x9(cube), None))  # 初始打乱态
 
     # 逐步执行逆操作
     for mv in solution_ops:
-        cube(mv)
         steps.append((cube_to_6x9(cube), mv))
+        cube(mv)
+
+    steps.append((cube_to_6x9(cube), None))  # 初始打乱态
 
     data_item = {
-        'scramble': ' '.join(scramble_ops),
-        'solution': ' '.join(solution_ops),
-        'steps': steps
+        'steps': steps  # [(6x9二维数组, move or None), ...]
     }
     return data_item
 
-def generate_shard(shard_index, num_samples, out_dir, min_scr=1, max_scr=25, seed_offset=0, flush_size=10000):
+def generate_shard(shard_index, num_samples, out_dir, min_scr=8, max_scr=25, seed_offset=0, flush_size=10000):
     """
     生成一个分片(shard)，共 num_samples 条数据。但为了避免大内存占用，
     每当累积到 flush_size 条时，就把数据dump到磁盘(追加写入)并清空缓存。
@@ -108,7 +107,7 @@ def generate_dataset_multiprocess(
         samples_per_shard=100,
         num_processes=4,
         out_dir='output',
-        min_scr=1,
+        min_scr=8,
         max_scr=25,
         flush_size=10_000
 ):
@@ -155,7 +154,7 @@ if __name__ == "__main__":
         samples_per_shard=100,
         num_processes=4,
         out_dir='rubik_shards',
-        min_scr=1,
+        min_scr=8,
         max_scr=25,
         flush_size=10_000  # 每1万条写一次
     )

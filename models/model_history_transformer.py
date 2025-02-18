@@ -21,7 +21,7 @@ class RubikSeq2SeqTransformer(nn.Module):
                  d_model=128,
                  nhead=4,
                  num_layers=12,
-                 num_moves=20,
+                 num_moves=21,
                  max_seq_len=50):
         """
         Args:
@@ -93,20 +93,18 @@ class RubikSeq2SeqTransformer(nn.Module):
         src = src + self.src_pos_embedding(src_positions)  # (src_seq_len, B, d_model)
 
         # 处理 Decoder 输入
-        # 1. tgt 本身为 token 序列，先转换形状 (tgt_seq_len, B)
-        tgt = tgt.permute(1, 0)
-        # 2. 嵌入并转换到 d_model 空间
-        tgt = self.tgt_embedding(tgt)  # (tgt_seq_len, B, d_model)
-        # 3. 添加位置编码
-        tgt_positions = torch.arange(tgt_seq_len, device=tgt.device).unsqueeze(1)
-        tgt = tgt + self.tgt_pos_embedding(tgt_positions)
+        tgt_input = tgt[:, :-1]  # 例如 [SOS, move1, move2, ..., move_{n-1}]
+        tgt_input = tgt_input.permute(1, 0)  # (tgt_seq_len-1, B)
+        tgt_emb = self.tgt_embedding(tgt_input)
+        tgt_positions = torch.arange(tgt_emb.size(0), device=tgt_emb.device).unsqueeze(1)
+        tgt_emb = tgt_emb + self.tgt_pos_embedding(tgt_positions)
 
-        # 生成 tgt 的因果掩码
-        tgt_mask = self.generate_square_subsequent_mask(tgt_seq_len).to(tgt.device)
+        # 生成 decoder 的因果掩码，长度为 tgt_emb 的时间步数 (即 tgt_seq_len-1)
+        tgt_mask = self.generate_square_subsequent_mask(tgt_emb.size(0)).to(tgt_emb.device)
 
         # 调用 Transformer 模型，得到 decoder 的输出
         # 注意：这里 src_mask、memory_mask、以及 padding mask 可以根据需要进一步补充
-        out = self.transformer(src=src, tgt=tgt, tgt_mask=tgt_mask)
+        out = self.transformer(src=src, tgt=tgt_emb, tgt_mask=tgt_mask)
         # out: (tgt_seq_len, B, d_model)
 
         # 将输出转换回 (B, tgt_seq_len, d_model)

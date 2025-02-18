@@ -21,7 +21,8 @@ class RubikDataset(Dataset):
         super().__init__()
         self.samples = []
         self.history_len = history_len
-        self.SOS_token = 18
+        self.SOS_token = 20
+        self.EOS_token = 18
 
         pkl_files = [f for f in os.listdir(data_dir) if f.endswith('.pkl')]
         pkl_files.sort()
@@ -72,12 +73,15 @@ class RubikDataset(Dataset):
                             # 第55个位置记录该步的 move 索引（如果有的话）
                             src_seq[i, 54] = mv_i_idx
 
+
+                        # gpt，请着重看一下这里面tgt_list的构建，这里面我发现只有EOS，但是没有SOS，是否会影响模型的正确性
                         # 构造 tgt：以 SOS 为起始符，后面跟从当前时刻 t 开始直到解法结束的 move 序列
-                        tgt_list = [self.SOS_token]  # 注意：self.SOS_token 需要在你的类中定义（例如设为 18，如果 move 索引范围是 0~17）
+                        tgt_list = [self.SOS_token]
                         for idx in range(t, len(steps)):
                             _, mv = steps[idx]
                             move_idx = move_str_to_idx(mv)
                             tgt_list.append(move_idx)
+                        tgt_list.append(self.EOS_token)  # 注意：self.SOS_token 需要在你的类中定义（例如设为 18，如果 move 索引范围是 0~17）
                         tgt_seq = torch.tensor(tgt_list, dtype=torch.long)
 
                         self.samples.append((src_seq, tgt_seq))
