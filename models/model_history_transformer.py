@@ -38,6 +38,9 @@ class RubikSeq2SeqTransformer(nn.Module):
         self.num_moves = num_moves
         self.max_seq_len = max_seq_len
 
+        # Dropout layer
+        self.dropout1 = nn.Dropout(p=0.2)
+
         # Encoder：对魔方状态进行线性映射，然后加上位置编码
         self.src_linear = nn.Linear(input_dim, d_model)
         self.src_pos_embedding = nn.Embedding(max_seq_len, d_model)
@@ -100,6 +103,7 @@ class RubikSeq2SeqTransformer(nn.Module):
             # tgt_key_padding_mask=...    # 可选
         )
         out = out.permute(1, 0, 2)  # => (B, tgt_seq_len-1, d_model)
+        out = self.dropout1(out)
         logits = self.fc_out(out)  # => (B, tgt_seq_len-1, num_moves)
         return logits
 

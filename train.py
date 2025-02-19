@@ -75,7 +75,7 @@ def main():
     # train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, collate_fn=collate_fn, num_workers=4)
     train_loader = DataLoader(
         train_dataset,
-        batch_size=64,
+        batch_size=128,
         shuffle=True,
         collate_fn=collate_fn,
         num_workers=4,
@@ -86,7 +86,7 @@ def main():
 
     # 2. Model
     # model = RubikSeq2SeqTransformer(num_layers=4,d_model=2048)
-    model = RubikSeq2SeqTransformer(num_layers=4,d_model=128)
+    model = RubikSeq2SeqTransformer(num_layers=4,d_model=2048)
     model = model.to(device)
 
     # 3. Optimizer & Loss

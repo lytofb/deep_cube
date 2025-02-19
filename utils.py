@@ -16,6 +16,8 @@ MOVE_TO_IDX = {m: i for i, m in enumerate(MOVES_POOL)}
 IDX_TO_MOVE = {i: m for m, i in MOVE_TO_IDX.items()}
 
 PAD_TOKEN = 18
+SOS_TOKEN = 20
+EOS_TOKEN = 19
 
 def convert_state_to_tensor(state_6x9, color_to_id=None):
     """

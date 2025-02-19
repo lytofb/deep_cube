@@ -3,6 +3,7 @@ import os
 import pickle
 import torch
 from torch.utils.data import Dataset
+from utils import PAD_TOKEN,SOS_TOKEN,EOS_TOKEN
 
 from utils import convert_state_to_tensor, move_str_to_idx
 
@@ -21,8 +22,8 @@ class RubikDataset(Dataset):
         super().__init__()
         self.samples = []
         self.history_len = history_len
-        self.SOS_token = 20
-        self.EOS_token = 18
+        self.SOS_token = SOS_TOKEN
+        self.EOS_token = EOS_TOKEN
 
         pkl_files = [f for f in os.listdir(data_dir) if f.endswith('.pkl')]
         pkl_files.sort()
@@ -94,9 +95,6 @@ class RubikDataset(Dataset):
 
 
 from torch.nn.utils.rnn import pad_sequence
-
-# 假设 PAD_TOKEN 是你定义的 PAD token 的索引（例如0）
-PAD_TOKEN = 19
 
 
 def collate_fn(batch):
