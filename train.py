@@ -139,10 +139,11 @@ def main():
 
         print(f"Epoch {epoch}, Loss={avg_loss:.4f}, LR={current_lr:.6f}")
 
+        val_acc = evaluate_seq2seq_accuracy(model, val_loader, device)
+        print(f"[Validation] Epoch {epoch}, Val_Acc={val_acc:.4f}")
+
         # 每 50 个 epoch 做一次验证
         if epoch % 50 == 0:
-            val_acc = evaluate_seq2seq_accuracy(model, val_loader, device)
-            print(f"[Validation] Epoch {epoch}, Val_Acc={val_acc:.4f}")
 
             # 保存当前 epoch 的模型
             ckpt_path = f"rubik_model_epoch{epoch}.pth"
