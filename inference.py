@@ -85,8 +85,11 @@ def greedy_decode_seq2seq(model, src, max_len=50):
             last_step_logits = logits[:, -1, :]
             next_token = torch.argmax(last_step_logits, dim=1)  # => (1,)
 
-            # 如果预测到 EOS_TOKEN，就停止
-            if next_token.item() == EOS_TOKEN:
+            if next_token.item() == PAD_TOKEN:
+                # 说明模型输出的是 PAD，用来占位
+                # 你可以选择 break（终止解码）或 continue（直接跳过）
+                break
+            elif next_token.item() == EOS_TOKEN:
                 break
 
             # 否则，拼到 decoder_input
@@ -120,7 +123,16 @@ def main():
     # 4. 用 seq2seq 进行贪心解码，生成还原动作序列
     pred_tokens = greedy_decode_seq2seq(model, src_tensor, max_len=50)
     # 转成字符串动作
-    pred_moves = [move_idx_to_str(t) for t in pred_tokens]
+    pred_moves = []
+    for t in pred_tokens:
+        if t == PAD_TOKEN:
+            # 不转换成动作，可能直接 break / 跳过
+            break
+        elif t == EOS_TOKEN:
+            break
+        else:
+            pred_moves.append(move_idx_to_str(t))
+    # pred_moves = [move_idx_to_str(t) for t in pred_tokens]
     print(f"Predicted moves: {pred_moves}")
 
     # 5. 依次执行预测动作，检查能否复原
