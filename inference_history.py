@@ -54,8 +54,8 @@ def evaluate_seq2seq_accuracy(
         dataset,
         device,
         max_len=50,
-        sos_token=20,
-        eos_token=18
+        sos_token=SOS_TOKEN,
+        eos_token=EOS_TOKEN
 ):
     """
     在给定的 dataset 上循环做贪心解码，并计算 token-level accuracy。
@@ -118,8 +118,7 @@ def main():
     # 2. 加载训练好的 seq2seq 模型
     model = RubikSeq2SeqTransformer(
         num_layers=4,
-        d_model=2048,
-        num_moves=21  # 确保和训练时一致
+        d_model=2048
     )
     model.load_state_dict(torch.load("rubik_model.pth", map_location=device))
     model.to(device)
