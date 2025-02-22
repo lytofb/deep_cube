@@ -52,12 +52,13 @@ def generate_single_case(min_scramble=1, max_scramble=25, seed_offset=0):
     # 记录打乱态 -> 复原态的每一步
     steps = []
 
-    # 逐步执行逆操作
-    for mv in solution_ops:
-        steps.append((cube_to_6x9(cube), mv))
-        cube(mv)
+    # (b) 最终状态
+    steps.append((cube_to_6x9(cube), None))
 
-    steps.append((cube_to_6x9(cube), None))  # 初始打乱态
+    # (a) 依次应用 solution_ops, 并记录
+    for move in solution_ops:
+        cube(move)
+        steps.append((cube_to_6x9(cube), move))
 
     data_item = {
         'steps': steps  # [(6x9二维数组, move or None), ...]

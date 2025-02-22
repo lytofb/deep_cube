@@ -83,13 +83,13 @@ def generate_single_case(min_scramble=3, max_scramble=25):
     #    初始状态(杂乱态) + 每一步应用 solution_ops 之后的状态
     steps = []
 
-    # (a) 依次应用 solution_ops, 并记录
-    for move in solution_ops:
-        steps.append((cube_to_6x9(cube), move))
-        cube(move)
-
     # (b) 最终状态
     steps.append((cube_to_6x9(cube), None))
+
+    # (a) 依次应用 solution_ops, 并记录
+    for move in solution_ops:
+        cube(move)
+        steps.append((cube_to_6x9(cube), move))
 
 
     data_item = {
