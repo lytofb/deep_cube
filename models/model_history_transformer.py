@@ -22,7 +22,9 @@ class RubikSeq2SeqTransformer(nn.Module):
                  nhead=4,
                  num_layers=12,
                  num_moves=21,
-                 max_seq_len=50):
+                 max_seq_len=50,
+                 dropout = 0.3,
+                 ):
         """
         Args:
             input_dim: 每个时间步的特征维度（例如魔方状态特征，如54贴纸+1 move信息）
@@ -38,8 +40,13 @@ class RubikSeq2SeqTransformer(nn.Module):
         self.num_moves = num_moves
         self.max_seq_len = max_seq_len
 
-        # Dropout layer
-        self.dropout1 = nn.Dropout(p=0.2)
+        # 1) 在输入 Embedding 上增加 Dropout
+        self.src_emb_dropout = nn.Dropout(dropout)
+        self.tgt_emb_dropout = nn.Dropout(dropout)
+
+        # 2) 对 Encoder/Decoder 的输出增加 Dropout（原有的 dropout1 也可保留）
+        self.dropout1 = nn.Dropout(dropout)
+
 
         # Encoder：对魔方状态进行线性映射，然后加上位置编码
         self.src_linear = nn.Linear(input_dim, d_model)
@@ -55,7 +62,8 @@ class RubikSeq2SeqTransformer(nn.Module):
             nhead=nhead,
             num_encoder_layers=num_layers,
             num_decoder_layers=num_layers,
-            dim_feedforward=d_model * 4
+            dim_feedforward=d_model * 4,
+            dropout=dropout  # <-- 让 Transformer 自身的多头注意力和前馈层也应用 Dropout
         )
 
         # 输出层：将 Transformer 输出投影到 move 词汇表上
@@ -85,11 +93,17 @@ class RubikSeq2SeqTransformer(nn.Module):
         src_positions = torch.arange(src_seq_len, device=src.device).unsqueeze(1)
         src = src + self.src_pos_embedding(src_positions)
 
+        # 在 Encoder 输入阶段也加个 Dropout
+        src = self.src_emb_dropout(src)
+
         # ------- Decoder Embedding -------
         tgt_input = tgt_input.permute(1, 0)  # => (tgt_seq_len-1, B)
         tgt_emb = self.tgt_embedding(tgt_input)
         tgt_positions = torch.arange(tgt_emb.size(0), device=tgt_emb.device).unsqueeze(1)
         tgt_emb = tgt_emb + self.tgt_pos_embedding(tgt_positions)
+
+        # 在 Decoder 输入阶段也加个 Dropout
+        tgt_emb = self.tgt_emb_dropout(tgt_emb)
 
         # ------- Causal Mask -------
         tgt_mask = self.generate_square_subsequent_mask(tgt_emb.size(0)).to(tgt_emb.device)

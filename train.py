@@ -112,12 +112,12 @@ def main():
     )
 
     # 2. Model
-    model = RubikSeq2SeqTransformer(num_layers=4, d_model=2048)
+    model = RubikSeq2SeqTransformer(num_layers=4, d_model=128)
     model = model.to(device)
 
     # 3. Optimizer & Loss
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5)
 
     # 调度器 (LinearWarmupCosineAnnealingLR)
     warmup_epochs = 50
