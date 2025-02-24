@@ -16,6 +16,9 @@ from utils import (
     SOS_TOKEN
 )
 
+from omegaconf import OmegaConf
+config = OmegaConf.load("config.yaml")
+
 def is_solved(cube):
     """判断 cube 是否复原：6 个面是否颜色统一"""
     for face_name in ['U', 'L', 'F', 'R', 'B', 'D']:
@@ -101,27 +104,30 @@ def greedy_decode_seq2seq(model, src, max_len=50):
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # 1. 加载训练好的 seq2seq 模型
+    # 1. 加载训练好的 seq2seq 模型，使用 config 中的参数
     model = RubikSeq2SeqTransformer(
-        num_layers=4,
-        d_model=2048,
-        # num_moves=21 (或 22 等，与你训练时保持一致)
+        input_dim=config.model.input_dim,
+        d_model=config.model.d_model,
+        num_layers=config.model.num_layers,
+        nhead=config.model.nhead,
+        num_moves=config.model.num_moves,
+        max_seq_len=config.model.max_seq_len,
+        dropout=config.model.dropout
     )
-    model.load_state_dict(torch.load("rubik_model.pth", map_location=device))
+    model.load_state_dict(torch.load(config.inference.model_path, map_location=device))
     model.to(device)
     model.eval()
 
     # 2. 随机打乱魔方
-    scramble_steps = 8
+    scramble_steps = config.inference.scramble_steps
     cube, scramble_moves = random_scramble_cube(steps=scramble_steps)
     print(f"Scramble moves: {scramble_moves}")
 
     # 3. 构造 src
     src_tensor = build_src_tensor_from_cube(cube).to(device)
-    # shape=(1,1,55)
-
     # 4. 用 seq2seq 进行贪心解码，生成还原动作序列
-    pred_tokens = greedy_decode_seq2seq(model, src_tensor, max_len=50)
+    pred_tokens = greedy_decode_seq2seq(model, src_tensor, max_len=config.inference.max_len)
+    print(f"Predicted tokens: {pred_tokens}")
     # 转成字符串动作
     pred_moves = []
     for t in pred_tokens:

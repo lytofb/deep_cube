@@ -22,3 +22,7 @@ comet:
   api_key: "Kneh4rDqtRHtLmTN6AvhSShWA"
   project_name: "deepcube"
   workspace: "lytofb"
+inference:
+  model_path: "rubik_model.pth"
+  scramble_steps: 8
+  max_len: 50
