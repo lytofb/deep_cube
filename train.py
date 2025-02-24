@@ -13,6 +13,10 @@ from models.model_history_transformer import RubikSeq2SeqTransformer
 
 from utilsp.linear_warmup_cosine_annealing_lr import LinearWarmupCosineAnnealingLR
 
+from comet_ml import start
+from comet_ml.integration.pytorch import log_model
+
+
 
 def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device):
     model.train()
@@ -85,6 +89,23 @@ def evaluate_seq2seq_accuracy(model, dataloader, device):
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # 新增：初始化 Comet ML 实验
+    experiment = start(
+      api_key="Kneh4rDqtRHtLmTN6AvhSShWA",
+      project_name="deepcube",
+      workspace="lytofb"
+    )
+    hyper_params = {
+        "batch_size": 128,
+        "learning_rate": 1e-4,
+        "weight_decay": 1e-5,
+        "warmup_epochs": 50,
+        "max_epochs": 1000,
+        "num_layers": 4,
+        "d_model": 128
+    }
+    experiment.log_parameters(hyper_params)
+
     # 1. Dataset & DataLoader
     train_dataset = RubikDataset(data_dir='rubik_shards', max_files=None)
     train_loader = DataLoader(
@@ -114,6 +135,8 @@ def main():
     # 2. Model
     model = RubikSeq2SeqTransformer(num_layers=4, d_model=128)
     model = model.to(device)
+
+    log_model(experiment, model=model, model_name="TheModel")
 
     # 3. Optimizer & Loss
     criterion = nn.CrossEntropyLoss()
@@ -155,6 +178,10 @@ def main():
                 best_val_acc = val_acc
                 torch.save(model.state_dict(), "rubik_model_best.pth")
                 print(f"当前准确率最好 ({val_acc:.4f})，已更新 rubik_model_best.pth")
+
+        experiment.log_metric("train_loss", avg_loss, step=epoch)
+        experiment.log_metric("lr", current_lr, step=epoch)
+        experiment.log_metric("val_accuracy", val_acc, step=epoch)
 
     # 最后再保存一次 (可选)
     torch.save(model.state_dict(), "rubik_model_final.pth")
