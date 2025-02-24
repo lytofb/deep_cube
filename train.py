@@ -1,5 +1,8 @@
 # train.py
 
+from comet_ml import start
+from comet_ml.integration.pytorch import log_model
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -13,8 +16,8 @@ from models.model_history_transformer import RubikSeq2SeqTransformer
 
 from utilsp.linear_warmup_cosine_annealing_lr import LinearWarmupCosineAnnealingLR
 
-from comet_ml import start
-from comet_ml.integration.pytorch import log_model
+from omegaconf import OmegaConf
+config = OmegaConf.load("config.yaml")
 
 
 
@@ -90,69 +93,68 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 新增：初始化 Comet ML 实验
+    # 初始化 Comet ML 实验（使用 config 中的参数）
     experiment = start(
-      api_key="Kneh4rDqtRHtLmTN6AvhSShWA",
-      project_name="deepcube",
-      workspace="lytofb"
+      api_key=config.comet.api_key,
+      project_name=config.comet.project_name,
+      workspace=config.comet.workspace
     )
-    hyper_params = {
-        "batch_size": 128,
-        "learning_rate": 1e-4,
-        "weight_decay": 1e-5,
-        "warmup_epochs": 50,
-        "max_epochs": 1000,
-        "num_layers": 4,
-        "d_model": 128
-    }
-    experiment.log_parameters(hyper_params)
+    # 记录所有超参数
+    experiment.log_parameters(OmegaConf.to_container(config, resolve=True))
 
     # 1. Dataset & DataLoader
-    train_dataset = RubikDataset(data_dir='rubik_shards', max_files=None)
+    train_dataset = RubikDataset(data_dir=config.data.train_dir, max_files=None)
     train_loader = DataLoader(
         train_dataset,
-        batch_size=128,
+        batch_size=config.train.batch_size,
         shuffle=True,
         collate_fn=collate_fn,
-        num_workers=4,
+        num_workers=config.train.num_workers,
         pin_memory=True,
         persistent_workers=True,
-        prefetch_factor=4
+        prefetch_factor=config.train.prefetch_factor
     )
 
     # ====== 新增验证集，假设放在 'rubik_val_shards' 目录 ======
-    val_dataset = RubikDataset(data_dir='rubik_val_shards', max_files=None)
+    val_dataset = RubikDataset(data_dir=config.data.val_dir, max_files=None)
     val_loader = DataLoader(
         val_dataset,
-        batch_size=128,
+        batch_size=config.train.batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=4,
+        num_workers=config.train.num_workers,
         pin_memory=True,
         persistent_workers=True,
-        prefetch_factor=4
+        prefetch_factor=config.train.prefetch_factor
     )
 
     # 2. Model
-    model = RubikSeq2SeqTransformer(num_layers=4, d_model=128)
+    # Model：使用配置中定义的模型参数
+    model = RubikSeq2SeqTransformer(
+        num_layers=config.model.num_layers,
+        d_model=config.model.d_model,
+        input_dim=config.model.input_dim,
+        nhead=config.model.nhead,
+        num_moves=config.model.num_moves,
+        max_seq_len=config.model.max_seq_len,
+        dropout=config.model.dropout
+    )
     model = model.to(device)
 
     log_model(experiment, model=model, model_name="TheModel")
 
     # 3. Optimizer & Loss
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5)
+    optimizer = optim.Adam(model.parameters(), lr=config.train.learning_rate, weight_decay=config.train.weight_decay)
 
-    # 调度器 (LinearWarmupCosineAnnealingLR)
-    warmup_epochs = 50
-    max_epochs = 1000
     scheduler = LinearWarmupCosineAnnealingLR(
         optimizer,
-        warmup_epochs=warmup_epochs,
-        max_epochs=max_epochs
+        warmup_epochs=config.train.warmup_epochs,
+        max_epochs=config.train.max_epochs
     )
 
     # 4. Training loop
-    epochs = 1000
+    epochs = config.train.max_epochs
     best_val_acc = 0.0  # 记录验证集准确率的最高值
 
     for epoch in range(1, epochs+1):

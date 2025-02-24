@@ -1,0 +1,24 @@
+# config.yaml
+data:
+  train_dir: "rubik_shards"
+  val_dir: "rubik_val_shards"
+train:
+  batch_size: 128
+  num_workers: 4
+  prefetch_factor: 4
+  learning_rate: 1e-4
+  weight_decay: 1e-5
+  warmup_epochs: 50
+  max_epochs: 1000
+model:
+  input_dim: 55
+  d_model: 128
+  num_layers: 4
+  nhead: 4
+  num_moves: 21
+  max_seq_len: 50
+  dropout: 0.3
+comet:
+  api_key: "Kneh4rDqtRHtLmTN6AvhSShWA"
+  project_name: "deepcube"
+  workspace: "lytofb"
