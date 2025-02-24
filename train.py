@@ -16,8 +16,12 @@ from models.model_history_transformer import RubikSeq2SeqTransformer
 
 from utilsp.linear_warmup_cosine_annealing_lr import LinearWarmupCosineAnnealingLR
 
+from torch.cuda.amp import autocast, GradScaler
+
 from omegaconf import OmegaConf
 config = OmegaConf.load("config.yaml")
+
+scaler = GradScaler()
 
 
 
@@ -37,16 +41,17 @@ def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device):
         target_output = tgt[:, 1:]   # (B, tgt_seq_len - 1)
 
         # 前向传播
-        logits = model(src, decoder_input)  # => (B, tgt_seq_len-1, num_moves)
+        with autocast():
+            logits = model(src, decoder_input)
+            B, seq_len, num_moves = logits.shape
+            logits = logits.reshape(-1, num_moves)
+            target_output = target_output.reshape(-1)
+            loss = criterion(logits, target_output)
 
-        # 展平计算损失
-        B, seq_len, num_moves = logits.shape
-        logits = logits.reshape(-1, num_moves)       # => (B*(seq_len-1), num_moves)
-        target_output = target_output.reshape(-1)    # => (B*(seq_len-1))
-
-        loss = criterion(logits, target_output)
-        loss.backward()
-        optimizer.step()
+        # 通过 scaler 反向传播并更新优化器
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
         total_loss += loss.item() * src.size(0)
 
