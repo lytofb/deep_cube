@@ -40,6 +40,19 @@ class RubikSeq2SeqTransformer(nn.Module):
         self.num_moves = num_moves
         self.max_seq_len = max_seq_len
 
+        # 新增：每个面的位置嵌入（6个面，位置向量维度设为 pos_dim，例如16）
+        self.pos_dim = 16
+        self.face_position_embedding = nn.Embedding(6, self.pos_dim)
+        self.face_pos_linear = nn.Linear(self.pos_dim, d_model)  # 投影到 d_model 维度
+
+        # 新增：用于将每个面原始 9 维特征转换为 d_model 维（方案一使用）
+        self.face_feature_linear = nn.Linear(9, d_model)
+
+        # 新增：卷积层用于捕获局部结构（利用一个合理的魔方展开图，例如十字型布局）
+        self.cube_net_conv = nn.Conv2d(in_channels=1, out_channels=d_model, kernel_size=3, padding=1)
+        self.cube_net_activation = nn.ReLU()
+        self.cube_net_dropout = nn.Dropout(dropout)
+
         # 1) 在输入 Embedding 上增加 Dropout
         self.src_emb_dropout = nn.Dropout(dropout)
         self.tgt_emb_dropout = nn.Dropout(dropout)
@@ -85,15 +98,41 @@ class RubikSeq2SeqTransformer(nn.Module):
             tgt_input: shape (B, tgt_seq_len-1)  # 训练循环外部已经截断好
         """
         B, src_seq_len, _ = src.shape
-        B, tgt_seq_len_minus1 = tgt_input.shape
+        # ① 提取魔方状态：假定前54维代表6个面（每面9个数）
+        cube_state = src[..., :54].view(B, src_seq_len, 6, 9)  # (B, T, 6, 9)
 
-        # ------- Encoder 部分保持不变 -------
-        src = src.permute(1, 0, 2).float()  # => (src_seq_len, B, d_model)
-        src = self.src_linear(src)
+        # ② 计算每个面的特征向量（不考虑空间布局，此处每面为一个向量）
+        face_features = self.face_feature_linear(cube_state)  # (B, T, 6, d_model)
+
+        # ③ 获取每个面的位置信息（固定面索引 0~5）
+        face_ids = torch.arange(6, device=src.device).unsqueeze(0).unsqueeze(0)  # (1,1,6)
+        face_pos_embed = self.face_position_embedding(face_ids)  # (1,1,6, pos_dim)
+        face_pos_embed_proj = self.face_pos_linear(face_pos_embed)  # (1,1,6, d_model)
+
+        # ④ 融合位置信息：加法融合（广播后）
+        face_features = face_features + face_pos_embed_proj  # (B, T, 6, d_model)
+
+        # ⑤ 为了捕获局部空间结构，使用卷积处理每个面原始的 3×3 布局：
+        cube_faces = cube_state.view(B, src_seq_len, 6, 3, 3).float()  # (B, T, 6, 3, 3)
+        # 对每个面单独处理：合并 batch & time & face 维度
+        faces_reshaped = cube_faces.view(B * src_seq_len * 6, 1, 3, 3)  # (B*T*6, 1, 3, 3)
+        conv_out = self.cube_net_conv(faces_reshaped)  # (B*T*6, d_model, 3, 3)
+        conv_out = self.cube_net_activation(conv_out)
+        conv_out = self.cube_net_dropout(conv_out)
+        # 全局池化，得到每个面的卷积特征向量
+        conv_face_feat = conv_out.view(B * src_seq_len * 6, self.d_model, -1).mean(dim=2)  # (B*T*6, d_model)
+        conv_face_feat = conv_face_feat.view(B, src_seq_len, 6, self.d_model)  # (B, T, 6, d_model)
+
+        # ⑥ 融合：例如对比两种特征，可取平均（也可拼接后投影）
+        fused_face_feat = (face_features + conv_face_feat) / 2  # (B, T, 6, d_model)
+
+        # ⑦ 聚合6个面的信息（例如求平均），作为每个时间步的编码表示
+        cube_enhanced = fused_face_feat.mean(dim=2)  # (B, T, d_model)
+
+        # 后续：使用 cube_enhanced 替代原先经过 self.src_linear 得到的表示
+        src = cube_enhanced.permute(1, 0, 2)  # (T, B, d_model)
         src_positions = torch.arange(src_seq_len, device=src.device).unsqueeze(1)
         src = src + self.src_pos_embedding(src_positions)
-
-        # 在 Encoder 输入阶段也加个 Dropout
         src = self.src_emb_dropout(src)
 
         # ------- Decoder Embedding -------
