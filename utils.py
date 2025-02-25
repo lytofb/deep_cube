@@ -18,6 +18,9 @@ IDX_TO_MOVE = {i: m for m, i in MOVE_TO_IDX.items()}
 PAD_TOKEN = 18
 SOS_TOKEN = 20
 EOS_TOKEN = 19
+MASK_TOKEN = 21
+
+VOCAB_SIZE = 22  # 0..17(动作) + 18(PAD) + 19(MASK) + 20(EOS) + 21(SOS)
 
 def convert_state_to_tensor(state_6x9, color_to_id=None):
     """
