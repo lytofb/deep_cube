@@ -59,22 +59,22 @@ def train_diffusion_lm_condition():
         total_count = 0
 
         for conds, seqs, lengths in dl:
-            conds = conds.to(device)  # (B,54)
+            conds = conds.to(device).float()  # (B,54)
             seqs = seqs.to(device)    # (B,L)
             B,L = seqs.shape
 
             # x0 = seqs
             t = torch.randint(0, diffusion.num_steps, (B,), device=device)
-            x_t = diffusion.q_sample(seqs, t)   # 替换为MASK_TOKEN=19
+            x_t = diffusion.q_sample(seqs, t)  # Replace with MASK_TOKEN
 
-            logits = model(x_t, conds)  # (B,L,22)
+            logits = model(x_t, conds)  # (B, L, VOCAB_SIZE)
             loss = criterion(logits.view(-1, VOCAB_SIZE), seqs.view(-1))
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            total_loss += loss.item()*B
+            total_loss += loss.item() * B
             total_count += B
 
         avg_loss = total_loss / total_count if total_count>0 else 0.0
@@ -83,3 +83,17 @@ def train_diffusion_lm_condition():
 
 if __name__ == "__main__":
     train_diffusion_lm_condition()
+# Traceback (most recent call last):
+#   File "/home/qugy/qugy_ws/deep_cube/train_diffusion.py", line 85, in <module>
+#     train_diffusion_lm_condition()
+#   File "/home/qugy/qugy_ws/deep_cube/train_diffusion.py", line 70, in train_diffusion_lm_condition
+#     logits = model(x_t, conds)  # (B,L,22)
+#   File "/home/qugy/miniconda3/envs/pact/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1110, in _call_impl
+#     return forward_call(*input, **kwargs)
+#   File "/home/qugy/qugy_ws/deep_cube/models/model_diffusion_lm.py", line 145, in forward
+#     cond_emb = self.cond_proj(cond)  # (B,d_model)
+#   File "/home/qugy/miniconda3/envs/pact/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1110, in _call_impl
+#     return forward_call(*input, **kwargs)
+#   File "/home/qugy/miniconda3/envs/pact/lib/python3.9/site-packages/torch/nn/modules/linear.py", line 103, in forward
+#     return F.linear(input, self.weight, self.bias)
+# RuntimeError: expected scalar type Float but found Long
