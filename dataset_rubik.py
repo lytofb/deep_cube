@@ -3,8 +3,7 @@ import os
 import pickle
 import torch
 from torch.utils.data import Dataset
-from utils import PAD_TOKEN,SOS_TOKEN,EOS_TOKEN
-
+from utils import PAD_TOKEN, SOS_TOKEN, EOS_TOKEN
 from utils import convert_state_to_tensor, move_str_to_idx
 from dataset_rubik_seq import generate_single_case
 
@@ -19,49 +18,25 @@ class RubikDataset(Dataset):
     """
 
     def __init__(self, data_dir='data', history_len=8, max_files=None,
-                 use_redis=True, redis_host='localhost', redis_port=6379, redis_db=0, redis_key='rubik_dataset',
                  num_samples=0,
                  min_scramble=8,
-                 max_scramble=25,
-                 ):
+                 max_scramble=25):
         super().__init__()
         self.samples = []
         self.history_len = history_len
         self.SOS_token = SOS_TOKEN
         self.EOS_token = EOS_TOKEN
-        self.use_redis = use_redis
 
-        if self.use_redis:
-            import redis
-            self.redis_client = redis.Redis(host=redis_host, port=redis_port, db=redis_db)
-            cached_data = self.redis_client.get(redis_key)
-            if cached_data is not None:
-                self.samples = pickle.loads(cached_data)
-                print(f"RubikDataset: 从 Redis key '{redis_key}' 加载了 {len(self.samples)} 个样本")
-            else:
-                if data_dir is not None:
-                    pkl_files = [f for f in os.listdir(data_dir) if f.endswith('.pkl')]
-                    pkl_files.sort()
-                    if max_files is not None:
-                        pkl_files = pkl_files[:max_files]
-                    for pf in pkl_files:
-                        full_path = os.path.join(data_dir, pf)
-                        self._load_from_file(full_path)
-                    self.redis_client.set(redis_key, pickle.dumps(self.samples))
-                    print(f"RubikDataset: 已将 {len(self.samples)} 个样本存入 Redis key '{redis_key}'")
-                else:
-                    self._generate_in_memory(num_samples, min_scramble, max_scramble)
+        if data_dir is not None:
+            pkl_files = [f for f in os.listdir(data_dir) if f.endswith('.pkl')]
+            pkl_files.sort()
+            if max_files is not None:
+                pkl_files = pkl_files[:max_files]
+            for pf in pkl_files:
+                full_path = os.path.join(data_dir, pf)
+                self._load_from_file(full_path)
         else:
-            if data_dir is not None:
-                pkl_files = [f for f in os.listdir(data_dir) if f.endswith('.pkl')]
-                pkl_files.sort()
-                if max_files is not None:
-                    pkl_files = pkl_files[:max_files]
-                for pf in pkl_files:
-                    full_path = os.path.join(data_dir, pf)
-                    self._load_from_file(full_path)
-            else:
-                self._generate_in_memory(num_samples, min_scramble, max_scramble)
+            self._generate_in_memory(num_samples, min_scramble, max_scramble)
 
     def _generate_in_memory(self, num_samples, min_scramble, max_scramble):
         print(f"RubikSeqDataset: 正在内存中生成 {num_samples} 条数据...")
@@ -69,7 +44,7 @@ class RubikDataset(Dataset):
             # 生成单条数据
             single_item = generate_single_case(min_scramble, max_scramble)
             self.samples.append(single_item)
-        print(f"RubikSeqDataset: 内存生成完毕，共生成 {len(self.data_list)} 条数据.")
+        print(f"RubikSeqDataset: 内存生成完毕，共生成 {len(self.samples)} 条数据.")
 
     def _load_from_file(self, file_path):
         """
@@ -111,15 +86,13 @@ class RubikDataset(Dataset):
                             # 第55个位置记录该步的 move 索引（如果有的话）
                             src_seq[i, 54] = mv_i_idx
 
-
-                        # gpt，请着重看一下这里面tgt_list的构建，这里面我发现只有EOS，但是没有SOS，是否会影响模型的正确性
                         # 构造 tgt：以 SOS 为起始符，后面跟从当前时刻 t 开始直到解法结束的 move 序列
                         tgt_list = [self.SOS_token]
                         for idx in range(t, len(steps)):
                             _, mv = steps[idx]
                             move_idx = move_str_to_idx(mv)
                             tgt_list.append(move_idx)
-                        tgt_list.append(self.EOS_token)  # 注意：self.SOS_token 需要在你的类中定义（例如设为 18，如果 move 索引范围是 0~17）
+                        tgt_list.append(self.EOS_token)
                         tgt_seq = torch.tensor(tgt_list, dtype=torch.long)
 
                         self.samples.append((src_seq, tgt_seq))
@@ -147,8 +120,6 @@ def collate_fn(batch):
     src_tensor = torch.stack(src_seqs, dim=0)  # (B, history_len+1, 55)
 
     # 对 tgt_seqs 进行 padding，使它们具有相同长度
-    # 如果 batch_first=True，则输出 shape 为 (B, max_tgt_len)
     tgt_tensor = pad_sequence(tgt_seqs, batch_first=True, padding_value=PAD_TOKEN)
 
     return src_tensor, tgt_tensor
-

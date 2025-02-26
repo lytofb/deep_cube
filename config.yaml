@@ -2,6 +2,7 @@
 data:
   train_dir: "rubik_shards"
   val_dir: "rubik_val_shards"
+  num_samples: 1000
 train:
   batch_size: 256
   num_workers: 4

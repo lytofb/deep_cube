@@ -215,7 +215,7 @@ def main():
     best_val_acc = 0.0  # 记录验证集准确率的最高值
 
     for epoch in range(1, epochs+1):
-        avg_loss = train_one_epoch_seq2seq(model, train_loader, optimizer, criterion, device)
+        avg_loss = train_one_epoch_seq2seq(model, train_loader, optimizer, criterion, device ,epoch ,epochs)
         scheduler.step()
         current_lr = scheduler.get_last_lr()[0]
 
