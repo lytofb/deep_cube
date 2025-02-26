@@ -1,6 +1,7 @@
 import random
 import os
 import pickle
+import redis
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -10,7 +11,6 @@ import pycuber as pc
 # ------------------------------------------------------------------
 # 一些全局定义 (包含 PAD/SOS/EOS 令牌)
 # ------------------------------------------------------------------
-
 
 MOVE_MAP = {
     'U': 0, 'U\'': 1, 'U2': 2,
@@ -111,33 +111,61 @@ def moves_to_action_ids(move_list):
 
 
 # ------------------------------------------------------------------
-# 按照第一个类的格式来改写的第二个类
+# 改造后的 RubikSeqDataset，支持 Redis 缓存
 # ------------------------------------------------------------------
 class RubikSeqDataset(Dataset):
     """
     根据给定的打乱/还原逻辑生成数据，但返回格式与第一个类保持一致:
       (cond(54,), seq) => seq中含 [SOS_TOKEN] 和 [EOS_TOKEN].
+
+    新增参数:
+      use_redis: 是否使用 Redis 缓存数据 (默认为 False)
+      redis_host, redis_port, redis_db: Redis 连接参数
+      redis_key: 存储数据的 Redis key
     """
 
     def __init__(self,
                  pkl_file=None,
                  num_samples=0,
                  min_scramble=8,
-                 max_scramble=25):
-        """
-        两种使用方式：
-          1. 如果指定 pkl_file (存在的路径)，就从文件中加载数据
-          2. 如果 pkl_file=None，则会在内存中直接生成 num_samples 条数据
-        """
+                 max_scramble=25,
+                 use_redis=False,
+                 redis_host='localhost',
+                 redis_port=6379,
+                 redis_db=0,
+                 redis_key='rubik_seq_dataset'):
         super().__init__()
         self.data_list = []
+        self.use_redis = use_redis
+        self.redis_key = redis_key
 
-        if pkl_file is not None:
-            # 从文件加载
-            self._load_from_pickle(pkl_file)
+        if self.use_redis:
+            self.redis_client = redis.Redis(host=redis_host, port=redis_port, db=redis_db)
+            # 尝试从 Redis 中加载数据
+            cached_data = self.redis_client.get(self.redis_key)
+            if cached_data is not None:
+                self.data_list = pickle.loads(cached_data)
+                print(f"RubikSeqDataset: 从 Redis key '{self.redis_key}' 加载了 {len(self.data_list)} 条数据")
+            else:
+                print(f"RubikSeqDataset: Redis 中未找到 key '{self.redis_key}'，开始加载/生成数据...")
+                if pkl_file is not None:
+                    if os.path.isdir(pkl_file):
+                        self._load_from_pickle_dir(pkl_file)
+                    else:
+                        raise ValueError(f"pkl_file 参数必须为包含 pkl 文件的目录，而不是文件: {pkl_file}")
+                else:
+                    self._generate_in_memory(num_samples, min_scramble, max_scramble)
+                # 将加载/生成的数据存入 Redis
+                self.redis_client.set(self.redis_key, pickle.dumps(self.data_list))
+                print(f"RubikSeqDataset: 已将 {len(self.data_list)} 条数据存入 Redis key '{self.redis_key}'")
         else:
-            # 在内存里直接生成
-            self._generate_in_memory(num_samples, min_scramble, max_scramble)
+            if pkl_file is not None:
+                if os.path.isdir(pkl_file):
+                    self._load_from_pickle_dir(pkl_file)
+                else:
+                    raise ValueError(f"pkl_file 参数必须为包含 pkl 文件的目录，而不是文件: {pkl_file}")
+            else:
+                self._generate_in_memory(num_samples, min_scramble, max_scramble)
 
     def __len__(self):
         return len(self.data_list)
@@ -153,7 +181,6 @@ class RubikSeqDataset(Dataset):
         # 取初始打乱态 (6x9) => 映射到 (54,)
         scrambled_6x9 = steps[0][0]
         cond = convert_state_to_tensor(scrambled_6x9)
-        # cond = flatten_6x9_to_ids(scrambled_6x9)
 
         # 解法动作 => steps[1..]
         solution_ops = [st[1] for st in steps[1:]]  # list of str
@@ -170,16 +197,32 @@ class RubikSeqDataset(Dataset):
             raise FileNotFoundError(f"pkl_file={pkl_file} 不存在")
         with open(pkl_file, 'rb') as f:
             self.data_list = pickle.load(f)
-        print(f"RubikSeqDataset: Loaded {len(self.data_list)} items from {pkl_file}")
+        print(f"RubikSeqDataset: 从 {pkl_file} 加载了 {len(self.data_list)} 条数据")
 
     def _generate_in_memory(self, num_samples, min_scramble, max_scramble):
-        print(f"RubikSeqDataset: Generating {num_samples} items in memory...")
+        print(f"RubikSeqDataset: 正在内存中生成 {num_samples} 条数据...")
         for _ in range(num_samples):
-            # 生成单条
+            # 生成单条数据
             single_item = generate_single_case(min_scramble, max_scramble)
             self.data_list.append(single_item)
-        print(f"RubikSeqDataset: In-memory generation done. Total {len(self.data_list)} items.")
+        print(f"RubikSeqDataset: 内存生成完毕，共生成 {len(self.data_list)} 条数据.")
 
+# 新增方法
+def _load_from_pickle_dir(self, pkl_dir):
+    if not os.path.exists(pkl_dir):
+         raise FileNotFoundError(f"目录 {pkl_dir} 不存在")
+    pkl_files = [os.path.join(pkl_dir, f) for f in os.listdir(pkl_dir) if f.endswith('.pkl')]
+    if not pkl_files:
+         raise FileNotFoundError(f"在目录 {pkl_dir} 中未找到任何 pkl 文件")
+    for file in pkl_files:
+         with open(file, 'rb') as f:
+              data = pickle.load(f)
+              # 如果 data 是列表，则合并所有数据；否则直接添加
+              if isinstance(data, list):
+                  self.data_list.extend(data)
+              else:
+                  self.data_list.append(data)
+    print(f"RubikSeqDataset: 从目录 {pkl_dir} 加载了 {len(self.data_list)} 条数据")
 
 # ------------------------------------------------------------------
 # 与第一个类的 collate_fn 保持一致的拼接逻辑
@@ -215,14 +258,15 @@ def collate_fn(batch):
 # 小测试
 # ------------------------------------------------------------------
 if __name__ == "__main__":
-    # 测试在内存生成
-    ds_inmem = RubikSeqDataset(num_samples=5, min_scramble=3, max_scramble=5)
+    # 测试在内存生成并使用 Redis 缓存
+    ds_inmem = RubikSeqDataset(num_samples=10000, min_scramble=3, max_scramble=5, use_redis=True,
+                               redis_host='localhost', redis_port=6379, redis_db=0, redis_key='rubik_seq_dataset_test')
     print("Dataset size:", len(ds_inmem))
 
     dl = DataLoader(ds_inmem, batch_size=2, shuffle=True, collate_fn=collate_fn)
     for conds, seqs, lengths in dl:
         print("conds.shape =", conds.shape)  # (B,54)
-        print("seqs.shape =", seqs.shape)  # (B, max_seq_len)
-        print("lengths =", lengths)  # 每条的原始序列长度
+        print("seqs.shape =", seqs.shape)    # (B, max_seq_len)
+        print("lengths =", lengths)          # 每条的原始序列长度
         print("seqs =", seqs)
         break
