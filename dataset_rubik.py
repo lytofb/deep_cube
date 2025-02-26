@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 from utils import PAD_TOKEN,SOS_TOKEN,EOS_TOKEN
 
 from utils import convert_state_to_tensor, move_str_to_idx
-
+from dataset_rubik_seq import generate_single_case
 
 class RubikDataset(Dataset):
     """
@@ -18,21 +18,58 @@ class RubikDataset(Dataset):
       ],  label = move_t
     """
 
-    def __init__(self, data_dir='data', history_len=8, max_files=None):
+    def __init__(self, data_dir='data', history_len=8, max_files=None,
+                 use_redis=True, redis_host='localhost', redis_port=6379, redis_db=0, redis_key='rubik_dataset',
+                 num_samples=0,
+                 min_scramble=8,
+                 max_scramble=25,
+                 ):
         super().__init__()
         self.samples = []
         self.history_len = history_len
         self.SOS_token = SOS_TOKEN
         self.EOS_token = EOS_TOKEN
+        self.use_redis = use_redis
 
-        pkl_files = [f for f in os.listdir(data_dir) if f.endswith('.pkl')]
-        pkl_files.sort()
-        if max_files is not None:
-            pkl_files = pkl_files[:max_files]
+        if self.use_redis:
+            import redis
+            self.redis_client = redis.Redis(host=redis_host, port=redis_port, db=redis_db)
+            cached_data = self.redis_client.get(redis_key)
+            if cached_data is not None:
+                self.samples = pickle.loads(cached_data)
+                print(f"RubikDataset: 从 Redis key '{redis_key}' 加载了 {len(self.samples)} 个样本")
+            else:
+                if data_dir is not None:
+                    pkl_files = [f for f in os.listdir(data_dir) if f.endswith('.pkl')]
+                    pkl_files.sort()
+                    if max_files is not None:
+                        pkl_files = pkl_files[:max_files]
+                    for pf in pkl_files:
+                        full_path = os.path.join(data_dir, pf)
+                        self._load_from_file(full_path)
+                    self.redis_client.set(redis_key, pickle.dumps(self.samples))
+                    print(f"RubikDataset: 已将 {len(self.samples)} 个样本存入 Redis key '{redis_key}'")
+                else:
+                    self._generate_in_memory(num_samples, min_scramble, max_scramble)
+        else:
+            if data_dir is not None:
+                pkl_files = [f for f in os.listdir(data_dir) if f.endswith('.pkl')]
+                pkl_files.sort()
+                if max_files is not None:
+                    pkl_files = pkl_files[:max_files]
+                for pf in pkl_files:
+                    full_path = os.path.join(data_dir, pf)
+                    self._load_from_file(full_path)
+            else:
+                self._generate_in_memory(num_samples, min_scramble, max_scramble)
 
-        for pf in pkl_files:
-            full_path = os.path.join(data_dir, pf)
-            self._load_from_file(full_path)
+    def _generate_in_memory(self, num_samples, min_scramble, max_scramble):
+        print(f"RubikSeqDataset: 正在内存中生成 {num_samples} 条数据...")
+        for _ in range(num_samples):
+            # 生成单条数据
+            single_item = generate_single_case(min_scramble, max_scramble)
+            self.samples.append(single_item)
+        print(f"RubikSeqDataset: 内存生成完毕，共生成 {len(self.data_list)} 条数据.")
 
     def _load_from_file(self, file_path):
         """

@@ -41,7 +41,7 @@ class RubikSeq2SeqTransformer(nn.Module):
         self.max_seq_len = max_seq_len
 
         # 新增：每个面的位置嵌入（6个面，位置向量维度设为 pos_dim，例如16）
-        self.pos_dim = 16
+        self.pos_dim = 2916
         self.face_position_embedding = nn.Embedding(6, self.pos_dim)
         self.face_pos_linear = nn.Linear(self.pos_dim, d_model)  # 投影到 d_model 维度
 
