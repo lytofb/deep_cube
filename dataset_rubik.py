@@ -43,7 +43,35 @@ class RubikDataset(Dataset):
         for _ in range(num_samples):
             # 生成单条数据
             single_item = generate_single_case(min_scramble, max_scramble)
-            self.samples.append(single_item)
+            steps = single_item['steps']
+            # 若总步数不足 history_len+1，则跳过
+            if len(steps) < self.history_len + 1:
+                continue
+            # 对每个解法序列，采用滑动窗口生成多个样本
+            for t in range(self.history_len, len(steps)):
+                # 构造 src：选取从 t-history_len 到 t（包含 t）的连续状态
+                seq_len = self.history_len + 1
+                src_seq = torch.empty((seq_len, 55), dtype=torch.long)
+                for i, idx in enumerate(range(t - self.history_len, t + 1)):
+                    s6x9_i, mv_i = steps[idx]
+                    # 如果 mv_i 为 None，用 -1 表示特殊 token
+                    mv_i_idx = move_str_to_idx(mv_i) if mv_i is not None else PAD_TOKEN
+                    state_tensor = convert_state_to_tensor(s6x9_i)  # shape (54,)
+                    # 前54个位置为状态表示
+                    src_seq[i, :54] = state_tensor
+                    # 第55个位置记录该步的 move 索引（如果有的话）
+                    src_seq[i, 54] = mv_i_idx
+
+                # 构造 tgt：以 SOS 为起始符，后面跟从当前时刻 t 开始直到解法结束的 move 序列
+                tgt_list = [self.SOS_token]
+                for idx in range(t, len(steps)):
+                    _, mv = steps[idx]
+                    move_idx = move_str_to_idx(mv)
+                    tgt_list.append(move_idx)
+                tgt_list.append(self.EOS_token)
+                tgt_seq = torch.tensor(tgt_list, dtype=torch.long)
+
+                self.samples.append((src_seq, tgt_seq))
         print(f"RubikSeqDataset: 内存生成完毕，共生成 {len(self.samples)} 条数据.")
 
     def _load_from_file(self, file_path):
@@ -105,7 +133,6 @@ class RubikDataset(Dataset):
 
 
 from torch.nn.utils.rnn import pad_sequence
-
 
 def collate_fn(batch):
     """
