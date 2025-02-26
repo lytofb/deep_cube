@@ -12,6 +12,8 @@ from tqdm import tqdm
 from dataset_rubik_seq import RubikSeqDataset, collate_fn
 from models.model_diffusion_lm import DiscreteDiffusionLM, DiffusionLMTransformer
 
+from utilsp.linear_warmup_cosine_annealing_lr import LinearWarmupCosineAnnealingLR
+
 from utils import (
     COLOR_CHARS,
     MOVES_POOL,
@@ -125,13 +127,13 @@ def train_diffusion_lm_condition():
     )
     dl = DataLoader(
         ds_inmem,
-        batch_size=config.data.batch_size,
+        batch_size=config.train.batch_size,
         shuffle=True,
         collate_fn=collate_fn
     )
     val_dl = DataLoader(
         val_ds_inmem,
-        batch_size=config.data.batch_size,
+        batch_size=config.train.batch_size,
         shuffle=True,
         collate_fn=collate_fn
     )
@@ -154,11 +156,17 @@ def train_diffusion_lm_condition():
         max_seq_len=config.model.max_seq_len  # 例如 50
     ).to(device)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.training.learning_rate)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config.train.learning_rate,weight_decay=config.train.weight_decay)
     # CE时, ignore_index=PAD_TOKEN (例如18), 使得填充区不计入loss
     criterion = nn.CrossEntropyLoss(ignore_index=PAD_TOKEN)
 
-    epochs = config.training.epochs
+    scheduler = LinearWarmupCosineAnnealingLR(
+        optimizer,
+        warmup_epochs=config.train.warmup_epochs,
+        max_epochs=config.train.max_epochs
+    )
+
+    epochs = config.train.epochs
     global_step = 0
     for ep in range(1, epochs + 1):
         model.train()
@@ -192,10 +200,12 @@ def train_diffusion_lm_condition():
             epoch_bar.set_postfix(loss=loss.item())
 
         avg_loss = total_loss / total_count if total_count > 0 else 0.0
+        scheduler.step()
+        current_lr = scheduler.get_last_lr()[0]
         # === 验证: 无teacher forcing, 多步采样准确率
         val_acc = evaluate_no_teacher_forcing(model, diffusion, val_dl, device)
 
-        print(f"Epoch {ep} | train_loss={avg_loss:.4f} | no_TF_val_acc={val_acc:.4f}")
+        print(f"Epoch {ep} | train_loss={avg_loss:.4f} | no_TF_val_acc={val_acc:.4f} |LR={current_lr:.6f}")
 
         # comet ml记录
         experiment.log_metric("train_loss", avg_loss, step=ep)
@@ -204,7 +214,7 @@ def train_diffusion_lm_condition():
     # 保存最终模型，并通过 Comet ML 记录模型
     torch.save(model.state_dict(), "diffusion_model_final.pth")
     log_model(experiment, model=model, model_name="DiffusionLMTransformer")
-    print("Training completed. Model saved as diffusion_model_final.pth")
+    print("train completed. Model saved as diffusion_model_final.pth")
 
 
 if __name__ == "__main__":
