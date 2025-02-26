@@ -102,7 +102,7 @@ class RubikSeq2SeqTransformer(nn.Module):
         cube_state = src[..., :54].view(B, src_seq_len, 6, 9)  # (B, T, 6, 9)
 
         # ② 计算每个面的特征向量（不考虑空间布局，此处每面为一个向量）
-        face_features = self.face_feature_linear(cube_state)  # (B, T, 6, d_model)
+        face_features = self.face_feature_linear(cube_state.float())  # (B, T, 6, d_model)
 
         # ③ 获取每个面的位置信息（固定面索引 0~5）
         face_ids = torch.arange(6, device=src.device).unsqueeze(0).unsqueeze(0)  # (1,1,6)
