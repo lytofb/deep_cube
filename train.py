@@ -25,90 +25,45 @@ scaler = GradScaler()
 
 
 def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device, epoch, total_epochs):
-    #(model, train_loader, optimizer, criterion, device)
-    """
-    用“单步策略+Scheduled Sampling”来训练。
-
-    - model: 虽然还是RubikSeq2SeqTransformer，但我们这里当做“policy”用，逐步解码。
-    - 每个 batch 的 (src, tgt)，其中:
-        src: (B, src_seq_len, 55)，一般表示初始或其它必要信息。
-        tgt: (B, tgt_seq_len)，序列动作。tgt[:, 0] 通常是SOS_TOKEN，tgt[:, 1:]是真实动作。
-    - 我们不再一次性把 tgt[:, :-1] 直接喂到 Decoder，
-      而是 step by step 地喂，并在每一步根据一定概率决定用“真值动作”或“模型预测动作”。
-
-    """
     model.train()
     total_loss = 0.0
 
-    # 定义一个“使用模型自身预测”的概率（即Scheduled Sampling的概率）
-    # 你可以根据 epoch 做一个递增或递减策略，这里仅作示例
+    # 设置 scheduled sampling 的概率（例如：前期主要用 teacher forcing，后期逐渐使用更多模型预测）
     sampling_prob = min(0.5, epoch / total_epochs * 0.5)
-    # 例如：前期主要用 teacher forcing，后期逐渐使用更多模型预测
 
     for src, tgt in tqdm(dataloader, desc=f"Training (epoch={epoch})"):
         src = src.to(device, non_blocking=True)
         tgt = tgt.to(device, non_blocking=True)
 
-        batch_size, seq_len = tgt.shape
-
-        # 我们要“逐步”产生decoder输入，并在每一步计算loss
-        # decoder_input 初始化只包含 tgt[:, 0] (一般是SOS_TOKEN)
-        decoder_input = tgt[:, 0].unsqueeze(1)  # shape: (B, 1)
-
-        # 用来收集每个时间步的预测结果（logits），最后一起计算loss
-        all_step_logits = []
+        # 构造 teacher forcing 下的 decoder 输入与目标
+        decoder_input = tgt[:, :-1].clone()   # (B, seq_len-1)
+        target_tokens = tgt[:, 1:].clone()      # (B, seq_len-1)
 
         optimizer.zero_grad()
 
-        # 逐步解码 seq_len - 1 步（因为第一步是SOS，不需要预测）
-        for t in range(seq_len - 1):
-            # 前向传播：把当前decoder_input喂给模型
-            with autocast():
-                # logits_current: (B, decoder_input_len, num_moves)
-                logits_current = model(src, decoder_input)
-                # 我们只关心最后一个时间步的输出 => (B, num_moves)
-                last_step_logits = logits_current[:, -1, :]
+        # 先做一次前向传播（不计算梯度），得到基于 teacher forcing 的预测，用于 token-level mixing
+        with torch.no_grad():
+            teacher_logits = model(src, decoder_input)
+            teacher_preds = teacher_logits.argmax(dim=-1)  # (B, seq_len-1)
 
-            # 把这个时刻的预测结果存起来
-            all_step_logits.append(last_step_logits)
+        # 对 decoder 输入的每个 token（除第一个 token 外）随机决定是否替换为模型预测
+        mix_mask = (torch.rand(decoder_input.shape, device=device) < sampling_prob)
+        mix_mask[:, 0] = False  # 保持 SOS token 不变
+        mixed_decoder_input = torch.where(mix_mask, teacher_preds, decoder_input)
 
-            # 根据一定概率决定下一个时间步要不要用模型预测值
-            # 先取出当前的预测token:
-            pred_tokens = last_step_logits.argmax(dim=-1)  # shape: (B,)
-
-            # gt_tokens = tgt[:, t+1] 是真实的下一步动作
-            gt_tokens = tgt[:, t + 1]
-
-            # 随机mask判断是否使用模型预测值
-            # 用 sampling_prob 来控制“使用模型预测”的概率
-            coin_toss = torch.rand(batch_size, device=device)  # (B,)
-            use_model_prediction = (coin_toss < sampling_prob)
-
-            # 组装“下一步 decoder 输入”，如果采样就用pred，否则用真值
-            next_tokens = torch.where(use_model_prediction, pred_tokens, gt_tokens)
-            # 拼到decoder_input后面
-            next_tokens = next_tokens.unsqueeze(1)  # (B,1)
-            decoder_input = torch.cat([decoder_input, next_tokens], dim=1)
-
-        # 最后把收集的所有时刻预测对齐 target => (B, seq_len-1)
-        # stack => (B, seq_len-1, num_moves)
-        all_step_logits = torch.stack(all_step_logits, dim=1)
-        # reshape
-        all_step_logits = all_step_logits.view(-1, all_step_logits.size(-1))  # => (B*(seq_len-1), num_moves)
-
-        target_tokens = tgt[:, 1:].contiguous().view(-1)  # => (B*(seq_len-1),)
-
+        # 使用混合后的输入进行前向传播，计算最终 loss
         with autocast():
-            loss = criterion(all_step_logits, target_tokens)
+            logits = model(src, mixed_decoder_input)  # (B, seq_len-1, num_moves)
+            loss = criterion(logits.view(-1, logits.size(-1)), target_tokens.contiguous().view(-1))
 
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
 
-        total_loss += loss.item() * batch_size
+        total_loss += loss.item() * tgt.size(0)
 
-    # 返回平均loss
     return total_loss / len(dataloader.dataset)
+
 
 @torch.no_grad()
 def evaluate_seq2seq_accuracy(model, dataloader, device):
