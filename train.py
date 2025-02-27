@@ -115,7 +115,7 @@ def main():
     experiment.log_parameters(OmegaConf.to_container(config, resolve=True))
 
     # 1. Dataset & DataLoader
-    train_dataset = RubikDataset(data_dir=config.data.train_dir, max_files=None)
+    train_dataset = RubikDataset(data_dir=config.data.train_dir, num_samples=config.data.num_samples, max_files=None)
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.train.batch_size,
