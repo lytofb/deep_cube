@@ -3,6 +3,11 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
+from dataset_rubik import RubikDataset, collate_fn
+
+from torch.utils.data import DataLoader
+from utils import PAD_TOKEN, SOS_TOKEN, EOS_TOKEN
+
 
 # -------------------------
 # 1. 辅助函数和自定义环境
@@ -26,15 +31,27 @@ def env_step(state, action):
     return state  # 仅作占位
 
 
-def get_training_batch(batch_size, src_seq_len=8, input_dim=55):
-    """
-    构造一个训练批次：
-      - src: 魔方状态张量，形状 (B, src_seq_len, input_dim)
-      - decoder_start: decoder 初始 token（假设起始 token id 为 0），形状 (B, 1)
-    """
-    src = torch.randn(batch_size, src_seq_len, input_dim)
-    decoder_start = torch.zeros(batch_size, 1, dtype=torch.long)
-    return src, decoder_start
+def get_training_batch():
+    global train_dataloader_iter
+
+    try:
+        src_batch, tgt_batch = next(train_dataloader_iter)
+    except StopIteration:
+        # 如果迭代到头了，重新创建迭代器
+        train_dataloader_iter = iter(train_dataloader)
+        src_batch, tgt_batch = next(train_dataloader_iter)
+
+    # src_batch.shape = (B, history_len+1, 55)
+    B = src_batch.shape[0]
+
+    # decoder_start 形状 (B, 1)，这里用0当作起始token
+    decoder_start = torch.full((B, 1), SOS_TOKEN, dtype=torch.long)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    src_batch = src_batch.to(device)
+    decoder_start = decoder_start.to(device)
+
+    return src_batch, decoder_start
 
 
 # -------------------------
@@ -72,7 +89,7 @@ def rollout(actor, critic, batch_size, rollout_len=5):
     values = []
     old_logits = []
 
-    src, decoder_input = get_training_batch(batch_size)
+    src, decoder_input = get_training_batch()
     current_src = src
     current_decoder = decoder_input
     for t in range(rollout_len):
@@ -241,6 +258,19 @@ def ppo_train(actor, critic, optimizer_actor, optimizer_critic,
 # -------------------------
 if __name__ == "__main__":
     from models.hf_model_history_transformer import RubikSeq2SeqConfig, RubikSeq2SeqForConditionalGeneration
+
+    # 假设你有一个数据目录 data_dir，并且想要history_len=8
+    train_dataset = RubikDataset(data_dir='rubik_shards', history_len=8)
+
+    # 使用collate_fn把Dataset取出的样本batch化
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=16,  # 可以按需调整
+        shuffle=True,
+        collate_fn=collate_fn
+    )
+    # 假设在某个文件或作用域中能访问到 train_dataloader
+    train_dataloader_iter = iter(train_dataloader)  # 先创建一个迭代器
 
     # 初始化模型配置（与预训练时保持一致）
     config = RubikSeq2SeqConfig(
