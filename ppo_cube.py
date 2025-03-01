@@ -150,61 +150,70 @@ def ppo_update(actor, critic, optimizer_actor, optimizer_critic,
                states, actions, old_logprobs, rewards, values, old_logits,
                clip_eps=0.2, kl_coef=0.1, vf_coef=0.5, ppo_epochs=4):
     """
-    对 rollout 中收集的数据进行 PPO 更新，更新 actor 与 critic。
+    参数说明：
+      - states: 长度为 T 的列表，每个元素是一个元组 (src, decoder_input) ，shape 分别为 (B, ...)；
+      - actions: tensor，shape (T, B)；
+      - old_logprobs: tensor，shape (T, B)；
+      - rewards: tensor，shape (T, B)；
+      - values: tensor，shape (T+1, B)；
+      - old_logits: tensor，shape (T, B, num_moves)。
     """
-    # 计算优势和收益
+    # 计算优势和收益，返回的优势和 returns 形状均为 (T, B)
     advantages, returns = compute_gae(rewards, values)
-    # 将 rollout 数据展平，形状 (T*B,)
     T, B = advantages.shape
-    advantages = advantages.view(-1)
-    returns = returns.view(-1)
-    old_logprobs = old_logprobs.view(-1)
-    actions = actions.view(-1)
-    old_logits = old_logits.view(T * B, -1)
 
-    # PPO 更新循环（此处示例中我们仅使用 rollout 数据进行一次简化的更新）
-    # 在实际中，你可能需要对 rollout 中的每个时间步分别进行 mini-batch 更新
-    # 为了简化，我们这里对所有 rollout 数据计算一次损失
-    # 重新计算当前策略下的 logprobs 与价值估计
-    current_logprobs_list = []
-    current_values_list = []
-    current_logits_list = []
-    # 遍历每个时间步的状态（这里假设每个 state 内 batch 大小一致）
-    for (src, decoder_input) in states:
-        hidden, logits = actor(src, decoder_input, return_hidden=True)
-        last_logits = logits[:, -1, :]  # (B, num_moves)
-        current_logits_list.append(last_logits)
-        dist = torch.distributions.Categorical(logits=last_logits)
-        current_logprobs_list.append(dist.log_prob(actions))  # actions: (B,) 注意此处可能需要匹配维度
-        last_hidden = hidden[:, -1, :]  # (B, d_model)
-        value = critic(last_hidden)
-        current_values_list.append(value)
-    # 为简化起见，取各时间步输出的平均作为当前策略输出（实际中建议对每个时间步分别处理）
-    current_logprobs = torch.stack(current_logprobs_list).mean(dim=0)
-    current_values = torch.stack(current_values_list).mean(dim=0)
-    current_logits = torch.stack(current_logits_list).mean(dim=0)
+    for epoch in range(ppo_epochs):
+        current_logprobs_list = []
+        current_values_list = []
+        current_logits_list = []
+        # 针对 rollout 中每个时间步计算当前策略下的输出
+        for t in range(T):
+            src_t, dec_t = states[t]  # src_t, dec_t 均形状 (B, ...)
+            # 要求 actor 支持参数 return_hidden=True，返回 (hidden, logits)
+            hidden_t, logits_t = actor(src_t, dec_t, return_hidden=True)
+            last_logits_t = logits_t[:, -1, :]  # (B, num_moves)
+            current_logits_list.append(last_logits_t)
+            dist_t = torch.distributions.Categorical(logits=last_logits_t)
+            # 注意：针对第 t 个时间步使用 actions[t]，形状 (B,)
+            current_logprobs_list.append(dist_t.log_prob(actions[t]))
+            last_hidden_t = hidden_t[:, -1, :]  # (B, d_model)
+            current_values_list.append(critic(last_hidden_t))
 
-    # 计算策略更新目标
-    ratio = torch.exp(current_logprobs - old_logprobs)
-    surr1 = ratio * advantages
-    surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * advantages
-    policy_loss = -torch.mean(torch.min(surr1, surr2))
+        # 将各时间步数据堆叠：形状分别为 (T, B) 或 (T, B, num_moves)
+        current_logprobs = torch.stack(current_logprobs_list, dim=0)  # (T, B)
+        current_values = torch.stack(current_values_list, dim=0)  # (T, B)
+        current_logits = torch.stack(current_logits_list, dim=0)  # (T, B, num_moves)
 
-    # 计算 KL 惩罚项
-    old_dist = torch.distributions.Categorical(logits=old_logits)
-    new_dist = torch.distributions.Categorical(logits=current_logits)
-    kl_div = torch.distributions.kl_divergence(old_dist, new_dist).mean()
+        # 将所有时间步与 batch 数据展平为 (T*B,)
+        current_logprobs_flat = current_logprobs.view(-1)
+        current_values_flat = current_values.view(-1)
+        old_logprobs_flat = old_logprobs.view(-1)
+        advantages_flat = advantages.view(-1)
+        returns_flat = returns.view(-1)
+        current_logits_flat = current_logits.view(T * B, -1)
+        old_logits_flat = old_logits.view(T * B, -1)
 
-    # Critic 损失（均方误差）
-    value_loss = F.mse_loss(current_values, returns)
+        # 计算概率比率
+        ratio = torch.exp(current_logprobs_flat - old_logprobs_flat)
+        surr1 = ratio * advantages_flat
+        surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * advantages_flat
+        policy_loss = -torch.mean(torch.min(surr1, surr2))
 
-    total_loss = policy_loss + vf_coef * value_loss + kl_coef * kl_div
+        # 计算新旧策略之间的 KL 散度
+        old_dist = torch.distributions.Categorical(logits=old_logits_flat)
+        new_dist = torch.distributions.Categorical(logits=current_logits_flat)
+        kl_div = torch.distributions.kl_divergence(old_dist, new_dist).mean()
 
-    optimizer_actor.zero_grad()
-    optimizer_critic.zero_grad()
-    total_loss.backward()
-    optimizer_actor.step()
-    optimizer_critic.step()
+        # Critic 的均方误差损失
+        value_loss = nn.functional.mse_loss(current_values_flat, returns_flat)
+
+        total_loss = policy_loss + vf_coef * value_loss + kl_coef * kl_div
+
+        optimizer_actor.zero_grad()
+        optimizer_critic.zero_grad()
+        total_loss.backward()
+        optimizer_actor.step()
+        optimizer_critic.step()
 
     return total_loss.item(), kl_div.item()
 
