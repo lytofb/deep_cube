@@ -75,13 +75,18 @@ class RubikSeq2SeqForConditionalGeneration(PreTrainedModel):
     def forward(self,
                 input_ids: torch.Tensor,          # encoder 输入：形状 (B, src_seq_len, input_dim)
                 decoder_input_ids: torch.Tensor,    # decoder 输入：形状 (B, tgt_seq_len)
+                return_hidden: bool = False,        # 是否返回隐藏状态（用于 PPO 中的 critic 计算）
                 **kwargs):
         """
         Args:
             input_ids: 编码器输入，包含魔方状态信息，形状 (B, src_seq_len, input_dim)
             decoder_input_ids: 解码器输入（move 索引），形状 (B, tgt_seq_len)
+            return_hidden: 如果为 True，则返回 (hidden, logits)
         Returns:
-            logits: 模型输出，每个时间步对 move 词汇表的预测分布，形状 (B, tgt_seq_len, num_moves)
+            如果 return_hidden 为 False，则返回 logits，形状 (B, tgt_seq_len, num_moves)
+            如果 return_hidden 为 True，则返回 (hidden, logits)：
+                - hidden 的形状为 (B, tgt_seq_len, d_model)
+                - logits 的形状为 (B, tgt_seq_len, num_moves)
         """
         B, src_seq_len, _ = input_ids.shape
         B2, tgt_seq_len = decoder_input_ids.shape
@@ -97,8 +102,7 @@ class RubikSeq2SeqForConditionalGeneration(PreTrainedModel):
 
         # ----- Decoder 部分 -----
         # 解码器输入为 token 索引，先做嵌入，再加上位置编码
-        tgt = decoder_input_ids.permute(0, 1)              # (B, tgt_seq_len)
-        tgt = tgt.permute(1, 0)                            # (tgt_seq_len, B)
+        tgt = decoder_input_ids.transpose(0, 1)            # (tgt_seq_len, B)
         tgt_emb = self.tgt_embedding(tgt)                  # (tgt_seq_len, B, d_model)
         tgt_positions = torch.arange(tgt_emb.size(0), device=tgt_emb.device).unsqueeze(1)  # (tgt_seq_len, 1)
         tgt_emb = tgt_emb + self.tgt_pos_embedding(tgt_positions)
@@ -112,11 +116,12 @@ class RubikSeq2SeqForConditionalGeneration(PreTrainedModel):
             src=src,
             tgt=tgt_emb,
             tgt_mask=tgt_mask,
-            # 如果需要，还可以添加 key_padding_mask 等参数
         )
-        out = out.permute(1, 0, 2)   # (B, tgt_seq_len, d_model)
-        out = self.dropout1(out)
-        logits = self.fc_out(out)    # (B, tgt_seq_len, num_moves)
+        out = out.transpose(0, 1)   # (B, tgt_seq_len, d_model)
+        hidden = self.dropout1(out)
+        logits = self.fc_out(hidden)    # (B, tgt_seq_len, num_moves)
+        if return_hidden:
+            return hidden, logits
         return logits
 
     def prepare_inputs_for_generation(self, decoder_input_ids, **kwargs):
@@ -128,15 +133,15 @@ class RubikSeq2SeqForConditionalGeneration(PreTrainedModel):
 # 3. 测试转换后的模型并加载预训练权重
 # ---------------------------
 if __name__ == "__main__":
-    # 定义配置
+    # 根据 config.yaml 中的模型配置初始化配置对象
     config = RubikSeq2SeqConfig(
         input_dim=55,
-        d_model=128,
-        nhead=4,
-        num_layers=12,
+        d_model=256,
+        nhead=8,
+        num_layers=6,
         num_moves=21,
         max_seq_len=50,
-        dropout=0.3
+        dropout=0.2
     )
     # 根据配置初始化模型
     model = RubikSeq2SeqForConditionalGeneration(config)
@@ -156,6 +161,11 @@ if __name__ == "__main__":
     # decoder 输入：随机生成 move 序列（索引），形状 (B, tgt_seq_len)
     tgt = torch.randint(0, config.num_moves, (B, tgt_seq_len))
 
-    # 前向传播
+    # 测试 forward：默认返回 logits
     logits = model(src, tgt)
     print("logits shape:", logits.shape)  # 预期输出: (B, tgt_seq_len, num_moves)
+
+    # 测试 forward：返回 (hidden, logits)
+    hidden, logits = model(src, tgt, return_hidden=True)
+    print("hidden shape:", hidden.shape)  # (B, tgt_seq_len, d_model)
+    print("logits shape:", logits.shape)
