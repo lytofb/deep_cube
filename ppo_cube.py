@@ -6,8 +6,7 @@ import torch.nn.functional as F
 from dataset_rubik import RubikDataset, collate_fn
 
 from torch.utils.data import DataLoader
-from utils import PAD_TOKEN, SOS_TOKEN, EOS_TOKEN
-
+from utils import PAD_TOKEN, SOS_TOKEN, EOS_TOKEN, IDX_TO_MOVE, move_idx_to_str, convert_state_to_tensor
 
 # -------------------------
 # 1. 辅助函数和自定义环境
@@ -22,13 +21,337 @@ def compute_reward(state, action):
     return reward
 
 
+# 假设之前已定义好各个动作的变换函数以及映射字典 move_funcs
+def rotate_face(face, times=1):
+    """
+    对一个3x3的面进行旋转，face 的 shape 为 (9,)
+    顺时针旋转一次的映射为：[6,3,0,7,4,1,8,5,2]
+    """
+    idx = torch.tensor([6, 3, 0, 7, 4, 1, 8, 5, 2], dtype=torch.long)
+    new_face = face.clone()
+    times = times % 4
+    for _ in range(times):
+        new_face = new_face[idx]
+    return new_face
+
+
+def move_U(state_54):
+    """
+    对前54个元素（魔方状态）应用 U 动作（上层顺时针旋转），假设状态的面顺序为
+    ['U', 'L', 'F', 'R', 'B', 'D']，每个面9个元素。
+
+    更新规则：
+      1. U 面（索引 0-8）顺时针旋转。
+      2. 上层相邻面上行进行循环替换：
+           F 上行（索引18-20） ← L 上行（索引9-11）
+           R 上行（索引27-29） ← F 上行（索引18-20）
+           B 上行（索引36-38） ← R 上行（索引27-29）
+           L 上行（索引9-11)  ← B 上行（索引36-38）
+    """
+    new_state = state_54.clone()
+    # 旋转 U 面
+    new_state[0:9] = rotate_face(state_54[0:9], times=1)
+    # 保存 L 面上行
+    temp = state_54[9:12].clone()
+    # 更新：L <- B, B <- R, R <- F, F <- L（temp）
+    new_state[9:12] = state_54[36:39]  # L 上行 ← 原 B 上行
+    new_state[36:39] = state_54[27:30]  # B 上行 ← 原 R 上行
+    new_state[27:30] = state_54[18:21]  # R 上行 ← 原 F 上行
+    new_state[18:21] = temp  # F 上行 ← 原 L 上行
+    return new_state
+
+
+def move_L(state_54):
+    """
+    对魔方状态（前54个元素）应用 L 动作（左侧面顺时针旋转），
+    假设 face_order = ['U','L','F','R','B','D']。
+    """
+    new_state = state_54.clone()
+    # 旋转 L 面（indices 9:18）
+    new_state[9:18] = rotate_face(state_54[9:18], times=1)
+
+    # 提取各受影响的列（均转换为 3x3 矩阵后取对应列）
+    U_face = state_54[0:9].view(3, 3)
+    F_face = state_54[18:27].view(3, 3)
+    D_face = state_54[45:54].view(3, 3)
+    B_face = state_54[36:45].view(3, 3)
+
+    # U 左列: 行0 col0, 行1 col0, 行2 col0  -> indices [0,3,6]
+    U_left = U_face[:, 0].clone()  # shape (3,)
+    # F 左列: indices [0, 3, 6] of F_face
+    F_left = F_face[:, 0].clone()
+    # D 左列: indices [0, 3, 6] of D_face
+    D_left = D_face[:, 0].clone()
+    # B 右列: 对 B_face，右列为 col2 -> indices [2,5,8]，但因 B 面方向与 U 相反，这里取倒序
+    B_right = B_face[:, 2].clone()
+
+    # 根据 L move 规则：
+    # 新 U_left = reverse(B_right)
+    new_U_left = torch.flip(B_right, dims=[0])
+    # 新 B_right = reverse(D_left)
+    new_B_right = torch.flip(D_left, dims=[0])
+    # 新 D_left = F_left
+    new_D_left = F_left.clone()
+    # 新 F_left = U_left
+    new_F_left = U_left.clone()
+
+    # 更新各面
+    U_face[:, 0] = new_U_left
+    F_face[:, 0] = new_F_left
+    D_face[:, 0] = new_D_left
+    B_face[:, 2] = new_B_right
+
+    new_state[0:9] = U_face.view(-1)
+    new_state[18:27] = F_face.view(-1)
+    new_state[36:45] = B_face.view(-1)
+    new_state[45:54] = D_face.view(-1)
+
+    return new_state
+
+
+def move_F(state_54):
+    """
+    对魔方状态（前54个元素）应用 F 动作（前侧面顺时针旋转），
+    假设 face_order = ['U','L','F','R','B','D']。
+    """
+    new_state = state_54.clone()
+    # 旋转 F 面（indices 18:27）
+    new_state[18:27] = rotate_face(state_54[18:27], times=1)
+
+    # 提取相关面（转换为 3x3 矩阵）
+    U_face = state_54[0:9].view(3, 3)
+    L_face = state_54[9:18].view(3, 3)
+    R_face = state_54[27:36].view(3, 3)
+    D_face = state_54[45:54].view(3, 3)
+
+    # U 底行：第三行 -> indices [6,7,8]
+    U_bottom = U_face[2, :].clone()  # shape (3,)
+    # L 右列： L_face 的第三列 -> indices: [2] 列，即 (row0 index 2, row1 index 2, row2 index 2)
+    L_right = L_face[:, 2].clone()  # shape (3,)
+    # R 左列： R_face 的第一列 -> indices: [0] 列
+    R_left = R_face[:, 0].clone()  # shape (3,)
+    # D 顶行： D_face 第一行 -> indices [0,1,2]
+    D_top = D_face[0, :].clone()  # shape (3,)
+
+    # F move 映射：
+    # 新 U_bottom = reverse(L_right)
+    new_U_bottom = torch.flip(L_right, dims=[0])
+    # 新 L_right = D_top
+    new_L_right = D_top.clone()
+    # 新 D_top = reverse(R_left)
+    new_D_top = torch.flip(R_left, dims=[0])
+    # 新 R_left = U_bottom
+    new_R_left = U_bottom.clone()
+
+    # 更新各面数据
+    U_face[2, :] = new_U_bottom
+    L_face[:, 2] = new_L_right
+    D_face[0, :] = new_D_top
+    R_face[:, 0] = new_R_left
+
+    new_state[0:9] = U_face.view(-1)
+    new_state[9:18] = L_face.view(-1)
+    new_state[27:36] = R_face.view(-1)
+    new_state[45:54] = D_face.view(-1)
+
+    return new_state
+
+
+def move_D(state_54):
+    new_state = state_54.clone()
+    # 旋转 D 面（indices 45:54）
+    new_state[45:54] = rotate_face(state_54[45:54], times=1)
+
+    # 将相关面转换为 3x3 矩阵
+    F_face = state_54[18:27].view(3, 3)
+    R_face = state_54[27:36].view(3, 3)
+    B_face = state_54[36:45].view(3, 3)
+    L_face = state_54[9:18].view(3, 3)
+
+    # 获取底行（第三行）: row index 2
+    F_bottom = F_face[2, :].clone()
+    R_bottom = R_face[2, :].clone()
+    B_bottom = B_face[2, :].clone()
+    L_bottom = L_face[2, :].clone()
+
+    # 更新：R ← F, B ← R, L ← B, F ← L
+    R_face[2, :] = F_bottom
+    B_face[2, :] = R_bottom
+    L_face[2, :] = B_bottom
+    F_face[2, :] = L_bottom
+
+    new_state[18:27] = F_face.view(-1)
+    new_state[27:36] = R_face.view(-1)
+    new_state[36:45] = B_face.view(-1)
+    new_state[9:18] = L_face.view(-1)
+    return new_state
+
+
+def move_R(state_54):
+    new_state = state_54.clone()
+    # 旋转 R 面（indices 27:36）
+    new_state[27:36] = rotate_face(state_54[27:36], times=1)
+
+    # 提取相关面（转换为 3x3 矩阵）
+    U_face = state_54[0:9].view(3, 3)
+    F_face = state_54[18:27].view(3, 3)
+    D_face = state_54[45:54].view(3, 3)
+    B_face = state_54[36:45].view(3, 3)
+
+    # U 右列：U_face[:, 2]
+    U_right = U_face[:, 2].clone()
+    # F 右列：F_face[:, 2]
+    F_right = F_face[:, 2].clone()
+    # D 右列：D_face[:, 2]
+    D_right = D_face[:, 2].clone()
+    # B 左列：B_face[:, 0]
+    B_left = B_face[:, 0].clone()
+
+    # 映射更新：
+    new_F_right = U_right.clone()  # F 右列 <- U 右列
+    new_D_right = F_right.clone()  # D 右列 <- F 右列
+    new_B_left = torch.flip(D_right, dims=[0])  # B 左列 <- reverse(D 右列)
+    new_U_right = torch.flip(B_left, dims=[0])  # U 右列 <- reverse(B 左列)
+
+    F_face[:, 2] = new_F_right
+    D_face[:, 2] = new_D_right
+    B_face[:, 0] = new_B_left
+    U_face[:, 2] = new_U_right
+
+    new_state[0:9] = U_face.view(-1)
+    new_state[18:27] = F_face.view(-1)
+    new_state[36:45] = B_face.view(-1)
+    new_state[45:54] = D_face.view(-1)
+    return new_state
+
+
+def move_B(state_54):
+    new_state = state_54.clone()
+    # 旋转 B 面（indices 36:45）
+    new_state[36:45] = rotate_face(state_54[36:45], times=1)
+
+    # 提取相关面（转换为 3x3 矩阵）
+    U_face = state_54[0:9].view(3, 3)
+    L_face = state_54[9:18].view(3, 3)
+    R_face = state_54[27:36].view(3, 3)
+    D_face = state_54[45:54].view(3, 3)
+
+    # U 顶行：U_face[0, :]
+    U_top = U_face[0, :].clone()
+    # R 右列：R_face[:,2]
+    R_right = R_face[:, 2].clone()
+    # D 顶行：D_face[0, :]
+    D_top = D_face[0, :].clone()
+    # L 左列：L_face[:,0]
+    L_left = L_face[:, 0].clone()
+
+    # 更新映射：
+    new_U_top = torch.flip(R_right, dims=[0])  # U 顶行 <- reverse(R 右列)
+    new_R_right = torch.flip(D_top, dims=[0])  # R 右列 <- reverse(D 顶行)
+    new_D_top = torch.flip(L_left, dims=[0])  # D 顶行 <- reverse(L 左列)
+    new_L_left = torch.flip(U_top, dims=[0])  # L 左列 <- reverse(U 顶行)
+
+    U_face[0, :] = new_U_top
+    R_face[:, 2] = new_R_right
+    D_face[0, :] = new_D_top
+    L_face[:, 0] = new_L_left
+
+    new_state[0:9] = U_face.view(-1)
+    new_state[9:18] = L_face.view(-1)
+    new_state[27:36] = R_face.view(-1)
+    new_state[45:54] = D_face.view(-1)
+    return new_state
+
+
+def move_U_prime(state_54):
+    # U' 等价于 U 顺时针旋转 3 次
+    return move_U(move_U(move_U(state_54)))
+
+def move_U2(state_54):
+    return move_U(move_U(state_54))
+
+# 新增 D 面操作
+def move_D_prime(state_54):
+    return move_D(move_D(move_D(state_54)))
+
+def move_D2(state_54):
+    return move_D(move_D(state_54))
+
+# 新增 F 面操作
+def move_F_prime(state_54):
+    return move_F(move_F(move_F(state_54)))
+
+def move_F2(state_54):
+    return move_F(move_F(state_54))
+
+# 新增 R 面操作
+def move_R_prime(state_54):
+    return move_R(move_R(move_R(state_54)))
+
+def move_R2(state_54):
+    return move_R(move_R(state_54))
+
+# 新增 L 面操作
+def move_L_prime(state_54):
+    return move_L(move_L(move_L(state_54)))
+
+def move_L2(state_54):
+    return move_L(move_L(state_54))
+
+# 新增 B 面操作
+def move_B_prime(state_54):
+    return move_B(move_B(move_B(state_54)))
+
+def move_B2(state_54):
+    return move_B(move_B(state_54))
+
+# 其他动作暂时未实现，直接返回原状态
+def move_placeholder(state_54):
+    return state_54
+
+move_funcs = {
+    "U": move_U,
+    "U'": move_U_prime,
+    "U2": move_U2,
+    "D": move_D,
+    "D'": move_D_prime,
+    "D2": move_D2,
+    "L": move_L,
+    "L'": move_L_prime,
+    "L2": move_L2,
+    "R": move_R,
+    "R'": move_R_prime,
+    "R2": move_R2,
+    "F": move_F,
+    "F'": move_F_prime,
+    "F2": move_F2,
+    "B": move_B,
+    "B'": move_B_prime,
+    "B2": move_B2,
+}
+
 def env_step(state, action):
     """
-    环境转移函数示例：
-    根据当前状态和动作返回下一个状态。
-    这里为了示例，直接返回原状态，实际中需要更新魔方状态。
+    环境转移函数：
+      - state: 当前魔方状态，形状 (55,)，前54个元素是状态表示，最后一个元素记录上一步 move id
+      - action: 本次执行的动作 id（整数）
+    功能：
+      根据动作更新魔方状态（前54个位置），并将新状态的第55个位置设置为本次动作 id。
     """
-    return state  # 仅作占位
+    # 提取前54个元素作为 cube state
+    cube_state = state[:54]
+    # 将动作 id 转换为动作字符串
+    move_str = IDX_TO_MOVE.get(int(action), None)
+    if move_str is None or move_str not in move_funcs:
+        # 如果动作无法识别，则返回原状态（或按需求处理）
+        return state
+    # 应用对应动作函数更新 cube state
+    new_cube_state = move_funcs[move_str](cube_state)
+    # 构造新的 state，前54个位置为 new_cube_state，第55个位置记录本次动作 id
+    new_state = state.clone()
+    new_state[:54] = new_cube_state
+    new_state[54] = action
+    return new_state
 
 
 def get_training_batch():
