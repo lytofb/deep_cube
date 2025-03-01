@@ -35,115 +35,98 @@ def rotate_face(face, times=1):
     return new_face
 
 
-def move_U(state_54):
+def rotate_face(face, times=1):
     """
-    对前54个元素（魔方状态）应用 U 动作（上层顺时针旋转），假设状态的面顺序为
-    ['U', 'L', 'F', 'R', 'B', 'D']，每个面9个元素。
+    对一个 3x3 面（形状 (9,)）进行顺时针旋转。
+    顺时针旋转一次的映射为：[6, 3, 0, 7, 4, 1, 8, 5, 2]
+    """
+    idx = torch.tensor([6, 3, 0, 7, 4, 1, 8, 5, 2], dtype=torch.long)
+    new_face = face.clone()
+    times = times % 4
+    for _ in range(times):
+        new_face = new_face[idx]
+    return new_face
 
-    更新规则：
-      1. U 面（索引 0-8）顺时针旋转。
-      2. 上层相邻面上行进行循环替换：
-           F 上行（索引18-20） ← L 上行（索引9-11）
-           R 上行（索引27-29） ← F 上行（索引18-20）
-           B 上行（索引36-38） ← R 上行（索引27-29）
-           L 上行（索引9-11)  ← B 上行（索引36-38）
-    """
+
+def move_U(state_54):
+    assert state_54.numel() == 54, f"Expected state length 54, got {state_54.numel()}"
     new_state = state_54.clone()
-    # 旋转 U 面
+    # U 面（indices 0:9）顺时针旋转
     new_state[0:9] = rotate_face(state_54[0:9], times=1)
-    # 保存 L 面上行
-    temp = state_54[9:12].clone()
-    # 更新：L <- B, B <- R, R <- F, F <- L（temp）
-    new_state[9:12] = state_54[36:39]  # L 上行 ← 原 B 上行
-    new_state[36:39] = state_54[27:30]  # B 上行 ← 原 R 上行
-    new_state[27:30] = state_54[18:21]  # R 上行 ← 原 F 上行
-    new_state[18:21] = temp  # F 上行 ← 原 L 上行
+    # 邻接面更新：根据 face_order = ['U','L','F','R','B','D']
+    # 对于 U 动作：
+    # 更新相邻面上行：F 上行 ← L 上行, R 上行 ← F 上行, B 上行 ← R 上行, L 上行 ← B 上行
+    temp = state_54[9:12].clone()  # L 上行
+    new_state[9:12] = state_54[36:39]  # L <- B
+    new_state[36:39] = state_54[27:30]  # B <- R
+    new_state[27:30] = state_54[18:21]  # R <- F
+    new_state[18:21] = temp  # F <- L
     return new_state
 
 
 def move_L(state_54):
-    """
-    对魔方状态（前54个元素）应用 L 动作（左侧面顺时针旋转），
-    假设 face_order = ['U','L','F','R','B','D']。
-    """
+    assert state_54.numel() == 54, f"Expected state length 54, got {state_54.numel()}"
     new_state = state_54.clone()
-    # 旋转 L 面（indices 9:18）
+    # L 面（indices 9:18）顺时针旋转
     new_state[9:18] = rotate_face(state_54[9:18], times=1)
 
-    # 提取各受影响的列（均转换为 3x3 矩阵后取对应列）
+    # 将各相关面转为 3x3 矩阵
     U_face = state_54[0:9].view(3, 3)
     F_face = state_54[18:27].view(3, 3)
     D_face = state_54[45:54].view(3, 3)
     B_face = state_54[36:45].view(3, 3)
 
-    # U 左列: 行0 col0, 行1 col0, 行2 col0  -> indices [0,3,6]
-    U_left = U_face[:, 0].clone()  # shape (3,)
-    # F 左列: indices [0, 3, 6] of F_face
+    # U 左列：U_face[:,0]
+    U_left = U_face[:, 0].clone()
+    # F 左列：F_face[:,0]
     F_left = F_face[:, 0].clone()
-    # D 左列: indices [0, 3, 6] of D_face
+    # D 左列：D_face[:,0]
     D_left = D_face[:, 0].clone()
-    # B 右列: 对 B_face，右列为 col2 -> indices [2,5,8]，但因 B 面方向与 U 相反，这里取倒序
+    # B 右列：B_face[:,2]，需要倒序，因为 B 面方向与 U 相反
     B_right = B_face[:, 2].clone()
 
-    # 根据 L move 规则：
-    # 新 U_left = reverse(B_right)
     new_U_left = torch.flip(B_right, dims=[0])
-    # 新 B_right = reverse(D_left)
     new_B_right = torch.flip(D_left, dims=[0])
-    # 新 D_left = F_left
     new_D_left = F_left.clone()
-    # 新 F_left = U_left
     new_F_left = U_left.clone()
 
-    # 更新各面
     U_face[:, 0] = new_U_left
-    F_face[:, 0] = new_F_left
-    D_face[:, 0] = new_D_left
     B_face[:, 2] = new_B_right
+    D_face[:, 0] = new_D_left
+    F_face[:, 0] = new_F_left
 
     new_state[0:9] = U_face.view(-1)
     new_state[18:27] = F_face.view(-1)
     new_state[36:45] = B_face.view(-1)
     new_state[45:54] = D_face.view(-1)
-
     return new_state
 
 
 def move_F(state_54):
-    """
-    对魔方状态（前54个元素）应用 F 动作（前侧面顺时针旋转），
-    假设 face_order = ['U','L','F','R','B','D']。
-    """
+    assert state_54.numel() == 54, f"Expected state length 54, got {state_54.numel()}"
     new_state = state_54.clone()
-    # 旋转 F 面（indices 18:27）
+    # F 面（indices 18:27）顺时针旋转
     new_state[18:27] = rotate_face(state_54[18:27], times=1)
 
-    # 提取相关面（转换为 3x3 矩阵）
     U_face = state_54[0:9].view(3, 3)
     L_face = state_54[9:18].view(3, 3)
     R_face = state_54[27:36].view(3, 3)
     D_face = state_54[45:54].view(3, 3)
 
-    # U 底行：第三行 -> indices [6,7,8]
-    U_bottom = U_face[2, :].clone()  # shape (3,)
-    # L 右列： L_face 的第三列 -> indices: [2] 列，即 (row0 index 2, row1 index 2, row2 index 2)
-    L_right = L_face[:, 2].clone()  # shape (3,)
-    # R 左列： R_face 的第一列 -> indices: [0] 列
-    R_left = R_face[:, 0].clone()  # shape (3,)
-    # D 顶行： D_face 第一行 -> indices [0,1,2]
-    D_top = D_face[0, :].clone()  # shape (3,)
+    # U 底行：U_face[2, :]
+    U_bottom = U_face[2, :].clone()
+    # L 右列：L_face[:,2]
+    L_right = L_face[:, 2].clone()
+    # R 左列：R_face[:,0]
+    R_left = R_face[:, 0].clone()
+    # D 顶行：D_face[0, :]
+    D_top = D_face[0, :].clone()
 
-    # F move 映射：
-    # 新 U_bottom = reverse(L_right)
     new_U_bottom = torch.flip(L_right, dims=[0])
-    # 新 L_right = D_top
     new_L_right = D_top.clone()
-    # 新 D_top = reverse(R_left)
     new_D_top = torch.flip(R_left, dims=[0])
-    # 新 R_left = U_bottom
     new_R_left = U_bottom.clone()
 
-    # 更新各面数据
     U_face[2, :] = new_U_bottom
     L_face[:, 2] = new_L_right
     D_face[0, :] = new_D_top
@@ -153,28 +136,28 @@ def move_F(state_54):
     new_state[9:18] = L_face.view(-1)
     new_state[27:36] = R_face.view(-1)
     new_state[45:54] = D_face.view(-1)
-
     return new_state
 
 
 def move_D(state_54):
+    assert state_54.numel() == 54, f"Expected state length 54, got {state_54.numel()}"
     new_state = state_54.clone()
-    # 旋转 D 面（indices 45:54）
+    # D 面（indices 45:54）顺时针旋转
     new_state[45:54] = rotate_face(state_54[45:54], times=1)
 
-    # 将相关面转换为 3x3 矩阵
+    # 对于 D 动作，更新受影响的底行：F, R, B, L 面的底行
     F_face = state_54[18:27].view(3, 3)
     R_face = state_54[27:36].view(3, 3)
     B_face = state_54[36:45].view(3, 3)
     L_face = state_54[9:18].view(3, 3)
 
-    # 获取底行（第三行）: row index 2
     F_bottom = F_face[2, :].clone()
     R_bottom = R_face[2, :].clone()
     B_bottom = B_face[2, :].clone()
     L_bottom = L_face[2, :].clone()
 
-    # 更新：R ← F, B ← R, L ← B, F ← L
+    # 更新顺序：F_bottom -> L_bottom -> B_bottom -> R_bottom
+    # 这里一种常见方案：新 R_bottom = F_bottom, 新 B_bottom = R_bottom, 新 L_bottom = B_bottom, 新 F_bottom = L_bottom
     R_face[2, :] = F_bottom
     B_face[2, :] = R_bottom
     L_face[2, :] = B_bottom
@@ -188,30 +171,25 @@ def move_D(state_54):
 
 
 def move_R(state_54):
+    assert state_54.numel() == 54, f"Expected state length 54, got {state_54.numel()}"
     new_state = state_54.clone()
-    # 旋转 R 面（indices 27:36）
+    # R 面（indices 27:36）顺时针旋转
     new_state[27:36] = rotate_face(state_54[27:36], times=1)
 
-    # 提取相关面（转换为 3x3 矩阵）
     U_face = state_54[0:9].view(3, 3)
     F_face = state_54[18:27].view(3, 3)
     D_face = state_54[45:54].view(3, 3)
     B_face = state_54[36:45].view(3, 3)
 
-    # U 右列：U_face[:, 2]
     U_right = U_face[:, 2].clone()
-    # F 右列：F_face[:, 2]
     F_right = F_face[:, 2].clone()
-    # D 右列：D_face[:, 2]
     D_right = D_face[:, 2].clone()
-    # B 左列：B_face[:, 0]
     B_left = B_face[:, 0].clone()
 
-    # 映射更新：
-    new_F_right = U_right.clone()  # F 右列 <- U 右列
-    new_D_right = F_right.clone()  # D 右列 <- F 右列
-    new_B_left = torch.flip(D_right, dims=[0])  # B 左列 <- reverse(D 右列)
-    new_U_right = torch.flip(B_left, dims=[0])  # U 右列 <- reverse(B 左列)
+    new_F_right = U_right.clone()
+    new_D_right = F_right.clone()
+    new_B_left = torch.flip(D_right, dims=[0])
+    new_U_right = torch.flip(B_left, dims=[0])
 
     F_face[:, 2] = new_F_right
     D_face[:, 2] = new_D_right
@@ -226,30 +204,25 @@ def move_R(state_54):
 
 
 def move_B(state_54):
+    assert state_54.numel() == 54, f"Expected state length 54, got {state_54.numel()}"
     new_state = state_54.clone()
-    # 旋转 B 面（indices 36:45）
+    # B 面（indices 36:45）顺时针旋转
     new_state[36:45] = rotate_face(state_54[36:45], times=1)
 
-    # 提取相关面（转换为 3x3 矩阵）
     U_face = state_54[0:9].view(3, 3)
     L_face = state_54[9:18].view(3, 3)
     R_face = state_54[27:36].view(3, 3)
     D_face = state_54[45:54].view(3, 3)
 
-    # U 顶行：U_face[0, :]
     U_top = U_face[0, :].clone()
-    # R 右列：R_face[:,2]
     R_right = R_face[:, 2].clone()
-    # D 顶行：D_face[0, :]
     D_top = D_face[0, :].clone()
-    # L 左列：L_face[:,0]
     L_left = L_face[:, 0].clone()
 
-    # 更新映射：
-    new_U_top = torch.flip(R_right, dims=[0])  # U 顶行 <- reverse(R 右列)
-    new_R_right = torch.flip(D_top, dims=[0])  # R 右列 <- reverse(D 顶行)
-    new_D_top = torch.flip(L_left, dims=[0])  # D 顶行 <- reverse(L 左列)
-    new_L_left = torch.flip(U_top, dims=[0])  # L 左列 <- reverse(U 顶行)
+    new_U_top = torch.flip(R_right, dims=[0])
+    new_R_right = torch.flip(D_top, dims=[0])
+    new_D_top = torch.flip(L_left, dims=[0])
+    new_L_left = torch.flip(U_top, dims=[0])
 
     U_face[0, :] = new_U_top
     R_face[:, 2] = new_R_right
@@ -330,28 +303,35 @@ move_funcs = {
     "B2": move_B2,
 }
 
-def env_step(state, action):
+def single_env_step(state, action):
     """
-    环境转移函数：
-      - state: 当前魔方状态，形状 (55,)，前54个元素是状态表示，最后一个元素记录上一步 move id
-      - action: 本次执行的动作 id（整数）
-    功能：
-      根据动作更新魔方状态（前54个位置），并将新状态的第55个位置设置为本次动作 id。
+    针对单个样本进行环境步进：
+      - state: 形状 (55,)，前54个元素是魔方状态，最后一个元素记录上一步动作
+      - action: 标量 tensor（单个动作 id）
     """
-    # 提取前54个元素作为 cube state
-    cube_state = state[:54]
-    # 将动作 id 转换为动作字符串
-    move_str = IDX_TO_MOVE.get(int(action), None)
+    # 使用 action.item() 转换为 Python 标量
+    move_str = IDX_TO_MOVE.get(int(action.item()), None)
     if move_str is None or move_str not in move_funcs:
-        # 如果动作无法识别，则返回原状态（或按需求处理）
-        return state
-    # 应用对应动作函数更新 cube state
-    new_cube_state = move_funcs[move_str](cube_state)
-    # 构造新的 state，前54个位置为 new_cube_state，第55个位置记录本次动作 id
+        return state  # 无法识别动作则返回原状态
+    # 对前54个元素应用对应动作函数
+    new_cube_state = move_funcs[move_str](state[:54])
     new_state = state.clone()
     new_state[:54] = new_cube_state
-    new_state[54] = action
+    new_state[54] = action  # 更新最后一位为本次动作 id
     return new_state
+
+def env_step(states, actions):
+    """
+    批量环境步进函数：
+      - states: 形状 (B, 55) 的状态张量
+      - actions: 形状 (B,) 的动作张量
+    对每个样本调用 single_env_step
+    """
+    new_states = states.clone()
+    for i in range(states.size(0)):
+        new_states[i] = single_env_step(states[i], actions[i])
+    return new_states
+
 
 
 def get_training_batch():
