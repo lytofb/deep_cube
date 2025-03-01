@@ -1,204 +1,261 @@
 import torch
-from torch.utils.data import DataLoader
-from torch.nn.utils.rnn import pad_sequence
-
-# 这是你已有的 Dataset 和 collate_fn
-from dataset_rubik import RubikDataset, collate_fn
-
-# PPO相关
-from trl import PPOConfig, PPOTrainer, AutoModelForCausalLMWithValueHead
-from transformers import AutoTokenizer
-
-# =============================
-# 1. 数据集与 DataLoader
-# =============================
-def build_dataloader(
-    data_dir,
-    batch_size=16,
-    shuffle=True,
-    num_workers=4,
-    pin_memory=True,
-    max_files=None
-):
-    dataset = RubikDataset(data_dir=data_dir, max_files=max_files)
-    loader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        collate_fn=collate_fn,
-        num_workers=num_workers,
-        pin_memory=pin_memory
-    )
-    return loader
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
 
 
-# =============================
-# 2. 加载已有的基础模型
-#    （假设已转换到 HF 格式）
-# =============================
-def load_pretrained_model_and_tokenizer(model_path: str, device: str = "cuda"):
+# -------------------------
+# 1. 辅助函数和自定义环境
+# -------------------------
+
+def compute_reward(state, action):
     """
-    这里示例直接用 from_pretrained() 加载一个已转换好的模型。
-    如果你的模型是自定义的 RubikSeq2SeqTransformer，需要手动封装/转换。
+    自定义奖励函数示例。
+    例如：若动作等于目标动作（这里设定为 3），则奖励为 1，否则为 0。
+    你需要根据魔方复原的任务设计更合理的奖励函数。
     """
-
-    # 加载带价值头的模型
-    model = AutoModelForCausalLMWithValueHead.from_pretrained(model_path)
-
-    # 放到指定设备
-    model = model.to(device)
-
-    return model
+    target_action = 3  # 示例目标动作
+    reward = (action == target_action).float()
+    return reward
 
 
-# =============================
-# 3. 定义一个奖励函数
-# =============================
-def compute_reward(predictions, labels):
+def env_step(state, action):
     """
-    predictions: List[str], 模型生成的动作序列或token序列(已decode)
-    labels:      List[str], 真实的/目标的动作序列或token序列(已decode)
-    return:      List[float], 长度与batch相同
+    环境转移函数示例。
+    根据当前状态和动作返回下一个状态，这里为了示例简单，直接返回原状态。
+    在实际任务中，需要根据动作对魔方状态进行更新。
     """
+    return state  # 仅作占位
+
+
+def get_training_batch(batch_size, src_seq_len=8, input_dim=55):
+    """
+    构造一个训练批次：
+      - src: 魔方状态张量，形状 (B, src_seq_len, input_dim)
+      - decoder_start: decoder 初始 token（假定起始 token id 为 0），形状 (B, 1)
+    """
+    src = torch.randn(batch_size, src_seq_len, input_dim)
+    decoder_start = torch.zeros(batch_size, 1, dtype=torch.long)
+    return src, decoder_start
+
+
+# -------------------------
+# 2. 定义 Critic 网络（用于价值函数估计）
+# -------------------------
+class Critic(nn.Module):
+    def __init__(self, d_model):
+        super().__init__()
+        self.fc = nn.Linear(d_model, 1)
+
+    def forward(self, hidden):
+        # hidden: shape (B, d_model)
+        return self.fc(hidden).squeeze(-1)  # 输出 shape (B,)
+
+
+# -------------------------
+# 3. Rollout 过程
+# -------------------------
+def rollout(actor, critic, batch_size, rollout_len=5):
+    """
+    模拟 rollout 过程，收集一段轨迹的数据。
+    返回：
+      states: 每一步的 (src, decoder_input) 数据
+      actions: 每一步采样的动作 (rollout_len, B)
+      logprobs: 每一步采样动作的 log 概率 (rollout_len, B)
+      rewards: 每一步的奖励 (rollout_len, B)
+      values: 每一步的价值估计 (rollout_len+1, B)
+      old_logits: 每一步的原始 logits (rollout_len, B, num_moves)
+    """
+    states = []
+    actions = []
+    logprobs = []
     rewards = []
-    for pred, lab in zip(predictions, labels):
-        # 简单示例：完全匹配则+1，不匹配则-1
-        # （实际可结合魔方“还原度”或启发式判断）
-        if pred == lab:
-            rewards.append(1.0)
-        else:
-            rewards.append(-1.0)
-    return rewards
+    values = []
+    old_logits = []
+
+    src, decoder_input = get_training_batch(batch_size)
+    current_src = src
+    current_decoder = decoder_input
+    for t in range(rollout_len):
+        # 前向传播：模型输出 logits，形状 (B, tgt_seq_len, num_moves)
+        outputs = actor(current_src, current_decoder)
+        # 取最后一步输出作为决策依据
+        last_logits = outputs[:, -1, :]  # shape: (B, num_moves)
+        old_logits.append(last_logits.detach())
+
+        # 为了计算价值，我们需要一个隐藏表示；这里简单使用 last_logits 作为 proxy（实际中应从模型中抽取 hidden state）
+        hidden = last_logits  # shape: (B, d_model) — 注意：这里维度可能不匹配，实际中请从模型中获得适当的隐藏状态
+        value = critic(hidden)  # shape: (B,)
+        values.append(value.detach())
+
+        # 构造策略分布并采样动作
+        dist = torch.distributions.Categorical(logits=last_logits)
+        action = dist.sample()  # shape: (B,)
+        actions.append(action)
+        logp = dist.log_prob(action)  # shape: (B,)
+        logprobs.append(logp.detach())
+
+        # 计算奖励（基于当前状态和动作）
+        reward = compute_reward(current_src, action)  # shape: (B,)
+        rewards.append(reward)
+
+        # 存储当前状态
+        states.append((current_src, current_decoder))
+
+        # 模拟环境步进：更新状态和 decoder 输入（这里简单地保持状态不变，并将采样动作拼接到 decoder 序列中）
+        next_src = env_step(current_src, action)
+        next_decoder = torch.cat([current_decoder, action.unsqueeze(-1)], dim=1)
+        current_src = next_src
+        current_decoder = next_decoder
+
+    # 最后一步状态价值
+    outputs = actor(current_src, current_decoder)
+    last_logits = outputs[:, -1, :]
+    hidden = last_logits
+    final_value = critic(hidden)  # shape: (B,)
+    values.append(final_value.detach())
+
+    # 将列表转换为张量
+    rewards = torch.stack(rewards, dim=0)  # (rollout_len, B)
+    logprobs = torch.stack(logprobs, dim=0)  # (rollout_len, B)
+    values = torch.stack(values, dim=0)  # (rollout_len+1, B)
+    actions = torch.stack(actions, dim=0)  # (rollout_len, B)
+    old_logits = torch.stack(old_logits, dim=0)  # (rollout_len, B, num_moves)
+
+    return states, actions, logprobs, rewards, values, old_logits
 
 
-# =============================
-# 4. PPO 训练过程
-# =============================
-def main():
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    # ---- 4.1 数据准备 ----
-    # 参考 train.py 里的路径、参数
-    train_dir = "rubik_train_shards"  # 或者 config.data.train_dir
-    val_dir   = "rubik_val_shards"
-
-    # 这里设置一个合理的 batch_size
-    ppo_batch_size = 16
-    num_workers = 4
-    train_loader = build_dataloader(
-        data_dir=train_dir,
-        batch_size=ppo_batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=True
-    )
-
-    # ---- 4.2 模型 & Tokenizer 加载 ----
-    # 这里假设你已经将 "rubik_model_best" 转换到 HF 格式，并能用 from_pretrained() 加载
-    model_path = "path/to/rubik_model_best_converted"
-    model = load_pretrained_model_and_tokenizer(model_path, device=device)
-
-    # ---- 4.3 PPO 配置与初始化 ----
-    ppo_config = PPOConfig(
-        steps=1024,             # 每个 epoch 的最大训练 step（可根据数据大小做调整）
-        batch_size=16,          # 一次 PPO step 用多少条数据
-        forward_batch_size=8,   # 前向计算时使用的 mini-batch 大小
-        lr=1e-5,
-        log_with=None,          # 若想要 tensorboard 或 wandb，可改成 'tensorboard'/'wandb'
-        optimize_cuda_usage=True,
-        # 其他可选超参: gamma, gae_lambda, cliprange, etc.
-    )
-
-    # 如果需要参考模型 ref_model 做KL惩罚，可在这里加载
-    #   ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_path).to(device)
-    #   ppo_trainer = PPOTrainer(config=ppo_config, model=model, ref_model=ref_model, tokenizer=tokenizer)
-    # 本例中先不使用参考模型
-    ppo_trainer = PPOTrainer(
-        config=ppo_config,
-        model=model,
-        ref_model=None,
-    )
-
-    # ---- 4.4 定义 PPO 训练循环 ----
-    num_epochs = 2  # 可以根据实际需要调整
-    step_count = 0  # 累计 step 数
-    for epoch in range(num_epochs):
-        print(f"===== PPO EPOCH {epoch+1} / {num_epochs} =====")
-
-        for batch_idx, (src, tgt) in enumerate(train_loader):
-            # 注：train_loader 返回 (src, tgt)，参考 train.py 里的 collate_fn
-            # src, tgt 的形状: (B, seq_len)
-
-            # 1) 先把 src/tgt 转成“可供 PPOTrainer 使用”的输入：
-            #    可以把 `src` 序列当做 queries；把 `tgt` (或其下一步动作)当做 labels。
-            #    这里演示：把 src 直接 decode 作为 prompt，tgt 也 decode 作为 ground truth。
-            #    具体视你的魔方动作如何编码而定。
-            src = src.to(device)
-            tgt = tgt.to(device)
-
-            # decode => List[str]
-            # 假设 collate_fn 里直接给的是 token id（兼容 tokenizer），
-            # 否则需要你自己的 state->text / action->text 转换。
-            queries_text = tokenizer.batch_decode(src, skip_special_tokens=True)
-            labels_text  = tokenizer.batch_decode(tgt, skip_special_tokens=True)
-
-            # 2) 让模型生成回复(动作/预测token)。在 PPO 场景下，一般用 sampling。
-            #    也可以限制 max_new_tokens = (长度)，top_k, top_p 等
-            query_tensors = tokenizer(
-                queries_text, padding=True, truncation=True, return_tensors="pt"
-            ).input_ids.to(device)
-
-            generation_outputs = model.generate(
-                query_tensors,
-                max_new_tokens=10,
-                do_sample=True,
-                top_k=50,
-                top_p=0.95
-            )
-
-            # 3) 解码模型预测
-            pred_texts = tokenizer.batch_decode(generation_outputs, skip_special_tokens=True)
-
-            # 4) 计算 Reward
-            rewards = compute_reward(pred_texts, labels_text)
-
-            # 5) 使用 PPOTrainer 的 step() 更新
-            #    先把“新生成的部分”从 generation_outputs 中分割出来
-            response_tensors = []
-            for q_tensor, g_output in zip(query_tensors, generation_outputs):
-                # 仅保留 q_tensor 之后的新生成 tokens 作为 response
-                response_part = g_output[len(q_tensor):]
-                response_tensors.append(response_part)
-
-            rewards_tensors = torch.tensor(rewards, dtype=torch.float, device=device)
-
-            # ppo_trainer.step() 会执行一次基于 PPO 的后向与更新
-            stats = ppo_trainer.step(
-                queries=query_tensors,
-                responses=response_tensors,
-                rewards=rewards_tensors
-            )
-
-            step_count += 1
-            if step_count % 50 == 0:
-                print(f"Epoch={epoch+1}, Step={step_count}, PPO stats={stats}")
-
-            # 当 step_count 接近 ppo_config.steps 时，可以考虑退出本 epoch
-            # 或者你想完整遍历完一个 epoch 的所有 batch 也行
-            if step_count >= ppo_config.steps:
-                break
-
-        # 每个 epoch 结束后可保存模型
-        save_path = f"ppo_rubik_model_epoch_{epoch+1}"
-        model.save_pretrained(save_path)
-        print(f"已保存 PPO 更新后的模型到 {save_path}")
-
-        # 如果想要继续训练下一个 epoch，可以在此重置 step_count 或让其累加
-        # 具体看你想如何分配 steps vs. epochs
-        # 这里简单演示，继续往下累加 steps
-
-    print("PPO 微调完成！")
+# -------------------------
+# 4. 计算优势和收益（使用 GAE）
+# -------------------------
+def compute_gae(rewards, values, gamma=0.99, lam=0.95):
+    """
+    rewards: (T, B), values: (T+1, B)
+    返回 advantages 和 returns，每个形状为 (T, B)
+    """
+    T = rewards.shape[0]
+    advantages = torch.zeros_like(rewards)
+    gae = 0
+    for t in reversed(range(T)):
+        delta = rewards[t] + gamma * values[t + 1] - values[t]
+        gae = delta + gamma * lam * gae
+        advantages[t] = gae
+    returns = advantages + values[:-1]
+    return advantages, returns
 
 
+# -------------------------
+# 5. PPO 更新
+# -------------------------
+def ppo_update(actor, critic, optimizer_actor, optimizer_critic,
+               states, actions, old_logprobs, rewards, values, old_logits,
+               clip_eps=0.2, kl_coef=0.1, vf_coef=0.5, ppo_epochs=4):
+    """
+    进行 PPO 更新，更新 actor 和 critic 参数
+    """
+    # 计算优势和收益
+    advantages, returns = compute_gae(rewards, values)
+    # 将 rollout 数据展平，形状 (T*B,)
+    T, B = advantages.shape
+    advantages = advantages.view(-1)
+    returns = returns.view(-1)
+    old_logprobs = old_logprobs.view(-1)
+    actions = actions.view(-1)
+    old_logits = old_logits.view(T * B, -1)
+
+    # PPO 更新循环
+    for _ in range(ppo_epochs):
+        # 为了更新，我们需要重新计算当前策略下的 logprobs 与价值估计
+        # 这里我们简单地对每个存储的 state 进行前向传播，并取最后 token 的输出
+        current_logprobs_list = []
+        current_values_list = []
+        current_logits_list = []
+        for (src, decoder_input) in states:
+            outputs = actor(src, decoder_input)
+            last_logits = outputs[:, -1, :]  # shape: (B, num_moves)
+            current_logits_list.append(last_logits)
+            dist = torch.distributions.Categorical(logits=last_logits)
+            current_logprobs_list.append(dist.log_prob(actions))  # 注意：这里假设 actions 与每个 state 对应的 batch 大小一致
+            hidden = last_logits  # 同上，作为价值估计的 proxy
+            value = critic(hidden)
+            current_values_list.append(value)
+        # 对 rollout 中每一步的输出取平均（作为一个简化处理）
+        current_logprobs = torch.stack(current_logprobs_list).mean(dim=0)
+        current_values = torch.stack(current_values_list).mean(dim=0)
+        current_logits = torch.stack(current_logits_list).mean(dim=0)
+
+        # 计算概率比
+        ratio = torch.exp(current_logprobs - old_logprobs)
+        surr1 = ratio * advantages
+        surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * advantages
+        policy_loss = -torch.mean(torch.min(surr1, surr2))
+
+        # KL 惩罚项：计算旧策略和新策略之间的 KL 距离
+        old_dist = torch.distributions.Categorical(logits=old_logits)
+        new_dist = torch.distributions.Categorical(logits=current_logits)
+        kl_div = torch.distributions.kl_divergence(old_dist, new_dist).mean()
+
+        # Critic 损失（价值函数的均方误差）
+        value_loss = F.mse_loss(current_values, returns)
+
+        total_loss = policy_loss + vf_coef * value_loss + kl_coef * kl_div
+
+        optimizer_actor.zero_grad()
+        optimizer_critic.zero_grad()
+        total_loss.backward()
+        optimizer_actor.step()
+        optimizer_critic.step()
+
+    return total_loss.item(), kl_div.item()
+
+
+# -------------------------
+# 6. PPO 训练主循环
+# -------------------------
+def ppo_train(actor, critic, optimizer_actor, optimizer_critic,
+              num_iterations=100, rollout_len=5, batch_size=16):
+    actor.train()
+    critic.train()
+    for iteration in range(num_iterations):
+        # 采样一段 rollout
+        states, actions, old_logprobs, rewards, values, old_logits = rollout(actor, critic, batch_size, rollout_len)
+        # PPO 更新
+        loss, kl_div = ppo_update(actor, critic, optimizer_actor, optimizer_critic,
+                                  states, actions, old_logprobs, rewards, values, old_logits)
+        if iteration % 10 == 0:
+            avg_reward = rewards.mean().item()
+            print(f"Iteration {iteration}: loss={loss:.4f}, KL={kl_div:.4f}, avg_reward={avg_reward:.4f}")
+
+
+# -------------------------
+# 7. 主程序入口
+# -------------------------
 if __name__ == "__main__":
-    main()
+    # 导入你的模型类和配置
+    from models.hf_model_history_transformer import RubikSeq2SeqConfig, RubikSeq2SeqForConditionalGeneration
+
+    # 根据预训练时使用的参数初始化配置
+    config = RubikSeq2SeqConfig(
+        input_dim=55,
+        d_model=256,
+        nhead=8,
+        num_layers=6,
+        num_moves=21,
+        max_seq_len=50,
+        dropout=0.2
+    )
+    # 实例化 actor 模型
+    actor = RubikSeq2SeqForConditionalGeneration(config)
+    # 加载预训练权重
+    state_dict = torch.load("rubik_model_best.pth", map_location="cpu")
+    actor.load_state_dict(state_dict)
+
+    # 实例化 critic 网络
+    critic = Critic(config.d_model)
+
+    optimizer_actor = optim.Adam(actor.parameters(), lr=1e-5)
+    optimizer_critic = optim.Adam(critic.parameters(), lr=1e-5)
+
+    # 开始 PPO 训练
+    ppo_train(actor, critic, optimizer_actor, optimizer_critic,
+              num_iterations=100, rollout_len=5, batch_size=16)
