@@ -12,7 +12,7 @@ from tqdm import tqdm
 # 可以根据需要开启/关闭 profiler
 # from torch.profiler import profile, record_function, ProfilerActivity
 
-from dataset_rubik import RubikDataset, collate_fn
+from dataset_rubik_pact import RubikDatasetPACT, collate_fn
 
 # ======= 新增：我们自己定义的 PACT GPT 模型 (或从另一文件中导入) =======
 from models.model_pact_transformer import RubikGPT
@@ -104,7 +104,7 @@ def main():
     experiment.log_parameters(OmegaConf.to_container(config, resolve=True))
 
     # -- 2. Dataset & Dataloader --
-    train_dataset = RubikDataset(data_dir=config.data.train_dir,
+    train_dataset = RubikDatasetPACT(data_dir=config.data.train_dir,
                                  num_samples=config.data.num_samples,
                                  max_files=None)
     train_loader = DataLoader(
@@ -118,7 +118,7 @@ def main():
         prefetch_factor=config.train.prefetch_factor
     )
 
-    val_dataset = RubikDataset(data_dir=config.data.val_dir, max_files=None)
+    val_dataset = RubikDatasetPACT(data_dir=config.data.val_dir, num_samples=config.data.num_samples, max_files=None)
     val_loader = DataLoader(
         val_dataset,
         batch_size=config.train.batch_size,

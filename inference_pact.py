@@ -270,7 +270,7 @@ def greedy_decode_pact(model, cube, max_steps=50):
             break
 
         # 6) 获取新的魔方状态，再加一个 dummy action，append 到 seq_list
-        new_tensor = build_state_action_tensor(cube, action_idx=PAD_TOKEN)
+        new_tensor = build_state_action_tensor(cube, action_idx=next_action_idx)
         seq_list.append(new_tensor)  # T += 1
 
     return predicted_actions
@@ -324,8 +324,8 @@ def main():
 
     # 3) 用自回归贪心解码
     max_len = config.inference.max_len
-    # pred_moves = greedy_decode_pact(model, cube, max_steps=max_len)
-    pred_moves = beam_search_pact(model, cube, max_steps=max_len)
+    pred_moves = greedy_decode_pact(model, cube, max_steps=max_len)
+    # pred_moves = beam_search_pact(model, cube, max_steps=max_len)
     print(f"Predicted moves: {pred_moves}")
 
     # 4) 结果检查
