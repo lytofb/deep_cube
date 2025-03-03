@@ -29,33 +29,32 @@ scaler = GradScaler()
 
 def train_one_epoch_pact(model, dataloader, optimizer, criterion, device, epoch):
     """
-    使用我们新的 PACT GPT 模型进行单个 epoch 的训练。
-    假设 dataloader 每次返回 (src, tgt)，其中:
-      - src.shape = (B, T, 55)
-      - tgt.shape = (B, T) (每个时间步的离散标签，比如动作索引)
+    不再使用外部 tgt，而是从 src 的第 54 维提取标签
     """
     model.train()
     total_loss = 0.0
     total_samples = 0
 
-    for src, tgt in tqdm(dataloader, desc=f"Training (epoch={epoch})"):
+    for src in tqdm(dataloader, desc=f"Training (epoch={epoch})"):
+        # 假设 dataloader 现在只返回 src
+        # 如果你原本 dataset 还有 (src, tgt)，就改成只返回 src 或忽略 tgt
         src = src.to(device, non_blocking=True)
-        tgt = tgt.to(device, non_blocking=True)  # (B,T)
 
         optimizer.zero_grad()
 
-        # 前向传播：得到 (B, 2T, vocab_size)
         with autocast():
-            logits = model(src)
-            # 只取 action token 的位置 (索引为1,3,5,... => logits[:, 1::2, :])
-            # shape => (B,T,vocab_size)
+            logits = model(src)  # => (B, 2T, vocab_size)
+
+            # 只取 action token => (B, T, vocab_size)
             action_logits = logits[:, 1::2, :]
 
-            # 与 tgt 对齐 => (B, T)
-            # 计算 cross entropy
+            # 从 src[..., 54] 拿标签
+            # 假设它已在数据集里存的是正确的动作索引 (int)
+            label_from_src = src[:, :, 54].long()  # => (B, T)
+
             loss = criterion(
-                action_logits.transpose(1, 2),  # (B, vocab_size, T) for nn.CrossEntropyLoss
-                tgt  # (B,T)
+                action_logits.transpose(1, 2),  # => (B, vocab_size, T)
+                label_from_src                 # => (B, T)
             )
 
         scaler.scale(loss).backward()
@@ -71,25 +70,26 @@ def train_one_epoch_pact(model, dataloader, optimizer, criterion, device, epoch)
 
 @torch.no_grad()
 def evaluate_pact_accuracy(model, dataloader, device):
-    """
-    使用我们 PACT GPT 模型在验证集上计算 token-level accuracy (只对 action token)。
-    """
     model.eval()
     total_correct = 0
     total_count = 0
 
-    for src, tgt in dataloader:
+    for src in dataloader:
         src = src.to(device)
-        tgt = tgt.to(device)  # (B,T)
 
-        logits = model(src)  # (B,2T,vocab_size)
-        action_logits = logits[:, 1::2, :]  # (B,T,vocab_size)
-        pred_tokens = action_logits.argmax(dim=-1)  # => (B,T)
+        logits = model(src)  # => (B,2T,vocab_size)
+        action_logits = logits[:, 1::2, :]  # => (B,T,vocab_size)
 
-        total_correct += (pred_tokens == tgt).sum().item()
-        total_count += tgt.numel()
+        # 从 src 拿到标签
+        label_from_src = src[:, :, 54].long()  # => (B, T)
 
-    return (total_correct / total_count) if total_count > 0 else 0.0
+        # argmax => (B,T)
+        pred_tokens = action_logits.argmax(dim=-1)
+
+        total_correct += (pred_tokens == label_from_src).sum().item()
+        total_count += label_from_src.numel()
+
+    return total_correct / total_count if total_count else 0.0
 
 
 def main():
