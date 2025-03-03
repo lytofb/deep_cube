@@ -35,7 +35,7 @@ def train_one_epoch_pact(model, dataloader, optimizer, criterion, device, epoch)
     total_loss = 0.0
     total_samples = 0
 
-    for src in tqdm(dataloader, desc=f"Training (epoch={epoch})"):
+    for src,_ in tqdm(dataloader, desc=f"Training (epoch={epoch})"):
         # 假设 dataloader 现在只返回 src
         # 如果你原本 dataset 还有 (src, tgt)，就改成只返回 src 或忽略 tgt
         src = src.to(device, non_blocking=True)
@@ -74,7 +74,7 @@ def evaluate_pact_accuracy(model, dataloader, device):
     total_correct = 0
     total_count = 0
 
-    for src in dataloader:
+    for src,_ in dataloader:
         src = src.to(device)
 
         logits = model(src)  # => (B,2T,vocab_size)
