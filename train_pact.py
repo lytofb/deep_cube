@@ -71,20 +71,18 @@ def evaluate_pact_accuracy(model, dataloader, device):
     total_correct = 0
     total_count = 0
 
-    for src,_ in dataloader:
+    for src, tgt in dataloader:
         src = src.to(device)
+        tgt = tgt.to(device)
 
         logits = model(src)  # => (B,2T,vocab_size)
         action_logits = logits[:, 1::2, :]  # => (B,T,vocab_size)
 
-        # 从 src 拿到标签
-        label_from_src = src[:, :, 54].long()  # => (B, T)
-
         # argmax => (B,T)
         pred_tokens = action_logits.argmax(dim=-1)
 
-        total_correct += (pred_tokens == label_from_src).sum().item()
-        total_count += label_from_src.numel()
+        total_correct += (pred_tokens == tgt).sum().item()
+        total_count += tgt.numel()
 
     return total_correct / total_count if total_count else 0.0
 
