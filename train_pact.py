@@ -270,15 +270,15 @@ def main():
         val_acc = evaluate_pact_accuracy(model, val_loader, device)
         print(f"[Validation] Epoch {epoch}, Val_Acc={val_acc:.4f}")
 
-        # 2) 再做 free-run 验证
-        val_acc_freerun = evaluate_pact_freerun(model, val_loader, device)
-        print(f"[Validation Free-Run] Epoch={epoch}, Acc={val_acc_freerun:.4f}")
-
         # 每 N 个 epoch 保存一次
         if epoch % 50 == 0:
             ckpt_path = f"rubik_model_epoch{epoch}.pth"
             torch.save(model.state_dict(), ckpt_path)
             print(f"已保存模型到 {ckpt_path}")
+
+            # 2) 再做 free-run 验证
+            val_acc_freerun = evaluate_pact_freerun(model, val_loader, device)
+            print(f"[Validation Free-Run] Epoch={epoch}, Acc={val_acc_freerun:.4f}")
 
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
