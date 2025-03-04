@@ -48,7 +48,7 @@ class RubikGPT(nn.Module):
         # )
 
         # 新增写法: 引入 GPTConfig 并实例化 GPT
-        from minGPT import GPT, GPTConfig  # 假设你把上面minGPT代码放到 mingpt.py 里
+        from models.minGPT import GPT, GPTConfig  # 假设你把上面minGPT代码放到 mingpt.py 里
 
         gpt_config = GPTConfig(
             n_embd=d_model,

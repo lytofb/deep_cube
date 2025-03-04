@@ -150,3 +150,10 @@ def collate_fn(batch):
     tgt_tensor = pad_sequence(tgt_seqs, batch_first=True, padding_value=PAD_TOKEN)
 
     return src_tensor, tgt_tensor
+
+# 测试用的main函数
+if __name__ == '__main__':
+    # 指定数据目录为当前目录下的 "rubik_shards"
+    data_dir = 'rubik_shards'
+    dataset = RubikDatasetPACT(data_dir=data_dir)
+    print(f"从目录 {data_dir} 加载数据，共 {len(dataset)} 条样本。")
