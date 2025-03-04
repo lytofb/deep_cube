@@ -40,6 +40,7 @@ def train_one_epoch_pact(model, dataloader, optimizer, criterion, device, epoch)
         # 假设 dataloader 现在只返回 src
         # 如果你原本 dataset 还有 (src, tgt)，就改成只返回 src 或忽略 tgt
         src = src.to(device, non_blocking=True)
+        tgt = tgt.to(device, non_blocking=True)
 
         optimizer.zero_grad()
 
