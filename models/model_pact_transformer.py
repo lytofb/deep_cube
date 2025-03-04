@@ -35,18 +35,31 @@ class RubikGPT(nn.Module):
         self.pos_embd_local  = nn.Embedding(max_seq_len,     d_model)
 
         # 3) 用 nn.TransformerDecoder 来模拟一个简单 GPT-like 的自回归结构
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model=d_model,
-            nhead=nhead,
-            dim_feedforward=ff_dim,
-            dropout=dropout,
-            activation='relu'
-        )
-        self.gpt = nn.TransformerDecoder(
-            decoder_layer=decoder_layer,
-            num_layers=num_layers
-        )
+        # decoder_layer = nn.TransformerDecoderLayer(
+        #     d_model=d_model,
+        #     nhead=nhead,
+        #     dim_feedforward=ff_dim,
+        #     dropout=dropout,
+        #     activation='relu'
+        # )
+        # self.gpt = nn.TransformerDecoder(
+        #     decoder_layer=decoder_layer,
+        #     num_layers=num_layers
+        # )
 
+        # 新增写法: 引入 GPTConfig 并实例化 GPT
+        from minGPT import GPT, GPTConfig  # 假设你把上面minGPT代码放到 mingpt.py 里
+
+        gpt_config = GPTConfig(
+            n_embd=d_model,
+            n_layer=num_layers,
+            n_head=nhead,
+            embd_pdrop=dropout,
+            resid_pdrop=dropout,
+            attn_pdrop=dropout,
+            seq_len=max_seq_len
+        )
+        self.gpt = GPT(gpt_config)
         # 4) 输出层：如果要预测一个离散动作的分布，则投影到 vocab_size
         self.fc_out = nn.Linear(d_model, vocab_size)
 
@@ -99,14 +112,17 @@ class RubikGPT(nn.Module):
 
         # 6) 调用 TransformerDecoder
         #    因为是 GPT-like，自回归，所以 memory 我们可以弄个假的全零即可
-        fake_memory = torch.zeros(1, B, self.d_model, device=src.device)  # (1,B,d_model) 仅演示
-        out = self.gpt(
-            tgt=combined_emb,
-            memory=fake_memory,
-            tgt_mask=causal_mask
-        )  # => (2T, B, d_model)
+        # fake_memory = torch.zeros(1, B, self.d_model, device=src.device)  # (1,B,d_model) 仅演示
+        # out = self.gpt(
+        #     tgt=combined_emb,
+        #     memory=fake_memory,
+        #     tgt_mask=causal_mask
+        # )  # => (2T, B, d_model)
+        combined_emb = combined_emb.transpose(0, 1)  # 先把 (2T, B, d_model) => (B, 2T, d_model)
+        out = self.gpt(combined_emb)  # => (B, 2T, d_model)
+        # out = out.transpose(0, 1)  # 若后面你仍需要 (2T, B, d_model)，可以再转回来
 
-        out = einops.rearrange(out, "seq b d -> b seq d")  # => (B, 2T, d_model)
+        # out = einops.rearrange(out, "seq b d -> b seq d")  # => (B, 2T, d_model)
 
         # 7) 映射到 vocab_size
         logits = self.fc_out(out)  # => (B, 2T, vocab_size)
