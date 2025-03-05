@@ -6,6 +6,7 @@ import pycuber as pc
 
 # 注意：从你的 seq2seq 模型文件导入
 from models.model_history_transformer import RubikSeq2SeqTransformer
+from tokenizer.tokenizer_rubik import RubikTokenizer
 
 from utils import (
     convert_state_to_tensor,  # 需兼容6x9输入 => (54,)
@@ -15,6 +16,8 @@ from utils import (
     EOS_TOKEN,
     SOS_TOKEN
 )
+
+tokenizer = RubikTokenizer()
 
 from omegaconf import OmegaConf
 config = OmegaConf.load("config.yaml")
@@ -54,7 +57,7 @@ def build_src_tensor_from_cube(cube):
         s6x9.append(row_data)
 
     # 转成 (54,) 的张量
-    state_54 = convert_state_to_tensor(s6x9)  # (54,)
+    state_54 = tokenizer.encode_state(s6x9)  # (54,)
 
     # 末尾补一个占位 move（训练时第55维存 move 索引）
     dummy_move = torch.tensor([PAD_TOKEN], dtype=torch.long)  # shape (1,)
@@ -137,7 +140,7 @@ def main():
         elif t == EOS_TOKEN:
             break
         else:
-            pred_moves.append(move_idx_to_str(t))
+            pred_moves.append(tokenizer.decode_move(t))
     # pred_moves = [move_idx_to_str(t) for t in pred_tokens]
     print(f"Predicted moves: {pred_moves}")
 
