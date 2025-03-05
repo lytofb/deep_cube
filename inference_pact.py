@@ -6,6 +6,9 @@ import pycuber as pc
 
 # 从你定义的 GPT 模型文件导入
 from models.model_pact_transformer import RubikGPT
+from tokenizer.tokenizer_rubik import RubikTokenizer
+
+tokenizer = RubikTokenizer()
 
 from utils import (
     convert_state_to_tensor,
@@ -115,7 +118,7 @@ def beam_search_pact(
 
                 # 新分支 => 深拷贝cube, 执行该动作
                 new_cube = clone_cube(cand.cube)
-                mv_str = move_idx_to_str(action_idx)
+                mv_str = tokenizer.decode_move(action_idx)
                 new_cube(mv_str)
 
                 # 构建下一个 (55,) 的 state+action (action先用PAD占位)
@@ -214,7 +217,7 @@ def build_state_action_tensor(cube, action_idx=PAD_TOKEN):
         s6x9.append(row_data)
 
     # 2) 转成 (54,) 的向量（int 索引等）
-    state_54 = convert_state_to_tensor(s6x9)  # => shape (54,)
+    state_54 = tokenizer.encode_state(s6x9)  # => shape (54,)
 
     # 3) 拼上 action => (55,)
     #    注意 GPT 里第 54 维是“上一步动作”
@@ -261,7 +264,7 @@ def greedy_decode_pact(model, cube, max_steps=50):
             break
 
         # 5) 将动作转成可执行字符串，并应用到魔方
-        next_action_str = move_idx_to_str(next_action_idx)
+        next_action_str = tokenizer.decode_move(next_action_idx)
         predicted_actions.append(next_action_str)
         cube(next_action_str)
 

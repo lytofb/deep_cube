@@ -6,6 +6,7 @@ from torch.utils.data import Dataset
 from utils import PAD_TOKEN, SOS_TOKEN, EOS_TOKEN
 from utils import convert_state_to_tensor, move_str_to_idx
 from dataset_rubik_seq import generate_single_case
+from tokenizer.tokenizer_rubik import RubikTokenizer
 
 class RubikDatasetPACT(Dataset):
     """
@@ -26,6 +27,7 @@ class RubikDatasetPACT(Dataset):
         self.history_len = history_len
         self.SOS_token = SOS_TOKEN
         self.EOS_token = EOS_TOKEN
+        self.tokenizer = RubikTokenizer()
 
         if data_dir is not None:
             pkl_files = [f for f in os.listdir(data_dir) if f.endswith('.pkl')]
@@ -55,8 +57,8 @@ class RubikDatasetPACT(Dataset):
                 for i, idx in enumerate(range(t - self.history_len, t + 1)):
                     s6x9_i, mv_i = steps[idx]
                     # 如果 mv_i 为 None，用 -1 表示特殊 token
-                    mv_i_idx = move_str_to_idx(mv_i) if mv_i is not None else PAD_TOKEN
-                    state_tensor = convert_state_to_tensor(s6x9_i)  # shape (54,)
+                    mv_i_idx = self.tokenizer.encode_move(mv_i)
+                    state_tensor = self.tokenizer.encode_state(s6x9_i)
                     # 前54个位置为状态表示
                     src_seq[i, :54] = state_tensor
                     # 第55个位置记录该步的 move 索引（如果有的话）
@@ -64,7 +66,7 @@ class RubikDatasetPACT(Dataset):
 
                 # 假设上面已经生成了 src_seq，形状 (seq_len, 55)，其中 seq_len = self.history_len + 1
                 tgt_seq = torch.empty(seq_len, dtype=torch.long)
-                # 对于前 seq_len-1 个位置，用 “下一行的动作” 填充
+                # 对于前 seq_len-1 个位置，用 "下一行的动作" 填充
                 for i in range(seq_len - 1):
                     # src_seq[i+1, 54] 就是下一时刻的动作
                     tgt_seq[i] = src_seq[i + 1, 54]
@@ -107,8 +109,8 @@ class RubikDatasetPACT(Dataset):
                         for i, idx in enumerate(range(t - self.history_len, t + 1)):
                             s6x9_i, mv_i = steps[idx]
                             # 如果 mv_i 为 None，用 -1 表示特殊 token
-                            mv_i_idx = move_str_to_idx(mv_i) if mv_i is not None else PAD_TOKEN
-                            state_tensor = convert_state_to_tensor(s6x9_i)  # shape (54,)
+                            mv_i_idx = self.tokenizer.encode_move(mv_i)
+                            state_tensor = self.tokenizer.encode_state(s6x9_i)
                             # 前54个位置为状态表示
                             src_seq[i, :54] = state_tensor
                             # 第55个位置记录该步的 move 索引（如果有的话）
@@ -116,7 +118,7 @@ class RubikDatasetPACT(Dataset):
 
                         # 假设上面已经生成了 src_seq，形状 (seq_len, 55)，其中 seq_len = self.history_len + 1
                         tgt_seq = torch.empty(seq_len, dtype=torch.long)
-                        # 对于前 seq_len-1 个位置，用 “下一行的动作” 填充
+                        # 对于前 seq_len-1 个位置，用 "下一行的动作" 填充
                         for i in range(seq_len - 1):
                             # src_seq[i+1, 54] 就是下一时刻的动作
                             tgt_seq[i] = src_seq[i + 1, 54]

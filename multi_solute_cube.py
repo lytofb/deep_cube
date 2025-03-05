@@ -3,6 +3,7 @@ import pickle
 import random
 import pycuber as pc
 import multiprocessing
+from tqdm import tqdm  # 新增
 
 MOVES_POOL = [
     'U', 'U\'', 'U2', 'D', 'D\'', 'D2',
@@ -96,12 +97,16 @@ def generate_shard(shard_index, num_samples, out_dir, min_scr=8, max_scr=25, see
             buffer_data.clear()
 
     # 写出剩余的
-    if len(buffer_data) > 0:
+    if buffer_data:
         with open(shard_file, "ab") as f:
             pickle.dump(buffer_data, f)
         buffer_data.clear()
 
     return shard_file
+
+def generate_shard_worker(params):
+    """顶层函数，用于多进程池中调用 generate_shard。"""
+    return generate_shard(*params)
 
 def generate_dataset_multiprocess(
         total_samples=10_000,
@@ -138,21 +143,22 @@ def generate_dataset_multiprocess(
             )
         )
 
-    # 多进程执行
+    shard_files = []
+    # 使用 imap_unordered 加上 tqdm 进度条监控分片生成进度
     with multiprocessing.Pool(processes=num_processes) as pool:
-        results = [pool.apply_async(generate_shard, p) for p in shard_params]
+        for shard_file in tqdm(pool.imap_unordered(generate_shard_worker, shard_params),
+                               total=total_shards, desc="生成分片"):
+            shard_files.append(shard_file)
         pool.close()
         pool.join()
-
-    shard_files = [r.get() for r in results]
     return shard_files
 
 if __name__ == "__main__":
-    # 示例: 在本地生成100万条, 分成10个分片, 4进程并行
-    # 每个分片(10万条)里， 每1万条就写一次磁盘，避免占用过多内存
+    # 示例: 在本地生成1000条, 分成10个分片, 4进程并行
+    # 每个分片(100条)里， 每1万条就写一次磁盘，避免占用过多内存
     all_shard_files = generate_dataset_multiprocess(
-        total_samples=1_000,
-        samples_per_shard=100,
+        total_samples=1_000_00,
+        samples_per_shard=1000_0,
         num_processes=4,
         out_dir='rubik_shards',
         min_scr=8,

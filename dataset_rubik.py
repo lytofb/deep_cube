@@ -6,6 +6,7 @@ from torch.utils.data import Dataset
 from utils import PAD_TOKEN, SOS_TOKEN, EOS_TOKEN
 from utils import convert_state_to_tensor, move_str_to_idx
 from dataset_rubik_seq import generate_single_case
+from tokenizer.tokenizer_rubik import RubikTokenizer
 
 class RubikDataset(Dataset):
     """
@@ -26,6 +27,7 @@ class RubikDataset(Dataset):
         self.history_len = history_len
         self.SOS_token = SOS_TOKEN
         self.EOS_token = EOS_TOKEN
+        self.tokenizer = RubikTokenizer()
 
         if data_dir is not None:
             pkl_files = [f for f in os.listdir(data_dir) if f.endswith('.pkl')]
@@ -55,8 +57,8 @@ class RubikDataset(Dataset):
                 for i, idx in enumerate(range(t - self.history_len, t + 1)):
                     s6x9_i, mv_i = steps[idx]
                     # 如果 mv_i 为 None，用 -1 表示特殊 token
-                    mv_i_idx = move_str_to_idx(mv_i) if mv_i is not None else PAD_TOKEN
-                    state_tensor = convert_state_to_tensor(s6x9_i)  # shape (54,)
+                    mv_i_idx = self.tokenizer.encode_move(mv_i)
+                    state_tensor = self.tokenizer.encode_state(s6x9_i)
                     # 前54个位置为状态表示
                     src_seq[i, :54] = state_tensor
                     # 第55个位置记录该步的 move 索引（如果有的话）
@@ -66,7 +68,7 @@ class RubikDataset(Dataset):
                 tgt_list = [self.SOS_token]
                 for idx in range(t, len(steps)):
                     _, mv = steps[idx]
-                    move_idx = move_str_to_idx(mv)
+                    move_idx = self.tokenizer.encode_move(mv)
                     tgt_list.append(move_idx)
                 tgt_list.append(self.EOS_token)
                 tgt_seq = torch.tensor(tgt_list, dtype=torch.long)
@@ -107,8 +109,8 @@ class RubikDataset(Dataset):
                         for i, idx in enumerate(range(t - self.history_len, t + 1)):
                             s6x9_i, mv_i = steps[idx]
                             # 如果 mv_i 为 None，用 -1 表示特殊 token
-                            mv_i_idx = move_str_to_idx(mv_i) if mv_i is not None else PAD_TOKEN
-                            state_tensor = convert_state_to_tensor(s6x9_i)  # shape (54,)
+                            mv_i_idx = self.tokenizer.encode_move(mv_i)
+                            state_tensor = self.tokenizer.encode_state(s6x9_i)
                             # 前54个位置为状态表示
                             src_seq[i, :54] = state_tensor
                             # 第55个位置记录该步的 move 索引（如果有的话）
@@ -118,7 +120,7 @@ class RubikDataset(Dataset):
                         tgt_list = [self.SOS_token]
                         for idx in range(t, len(steps)):
                             _, mv = steps[idx]
-                            move_idx = move_str_to_idx(mv)
+                            move_idx = self.tokenizer.encode_move(mv)
                             tgt_list.append(move_idx)
                         tgt_list.append(self.EOS_token)
                         tgt_seq = torch.tensor(tgt_list, dtype=torch.long)
