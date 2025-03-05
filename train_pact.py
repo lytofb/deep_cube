@@ -1,4 +1,4 @@
-# train.py
+# train_pact.py
 
 from comet_ml import start
 from comet_ml.integration.pytorch import log_model
@@ -9,41 +9,87 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-# 可以根据需要开启/关闭 profiler
-# from torch.profiler import profile, record_function, ProfilerActivity
+from dataset_rubik_pact import RubikDatasetPACT  # 刚才我们新建/修改的 Dataset
 
-from dataset_rubik_pact import RubikDatasetPACT, collate_fn
+# === 新增：导入 RubikTokenizer ===
+from tokenizer.tokenizer_rubik import RubikTokenizer
+# 一些特殊 token
+from utils import PAD_TOKEN, SOS_TOKEN, EOS_TOKEN
 
-# ======= 新增：我们自己定义的 PACT GPT 模型 (或从另一文件中导入) =======
+# === 你的模型、训练函数等... ===
 from models.model_pact_transformer import RubikGPT
-from utils import PAD_TOKEN
-
 from utilsp.linear_warmup_cosine_annealing_lr import LinearWarmupCosineAnnealingLR
 from torch.cuda.amp import autocast, GradScaler
-
 from omegaconf import OmegaConf
 
 config = OmegaConf.load("configtest.yaml")
-
 scaler = GradScaler()
+
+# ------------------- 新的 collate_fn -------------------
+def collate_fn(batch):
+    """
+    batch: list of (src_seq_raw, tgt_seq_raw)
+      - src_seq_raw: list of (s6x9_str, move_str or None), 长度 = history_len+1
+      - tgt_seq_raw: list of move_str or None, 长度 = (不定)
+
+    在这里，我们使用 RubikTokenizer 对每条数据进行 encode_state / encode_move，并插入 [SOS]/[EOS]。
+    返回可训练的张量 (src_tensor, tgt_tensor)。
+    """
+    tokenizer = RubikTokenizer()
+
+    src_list = []
+    tgt_list = []
+
+    for (src_seq_raw, tgt_seq_raw) in batch:
+        # 1) 编码 src_seq_raw => shape (history_len+1, 55)
+        seq_len = len(src_seq_raw)  # = history_len+1
+        tmp_src = torch.empty((seq_len, 55), dtype=torch.long)
+
+        for i, (s6x9_i, mv_i) in enumerate(src_seq_raw):
+            if s6x9_i is None:
+                # 有些数据可能没有 state？依你情况而定，这里给个默认全 -1
+                tmp_src[i, :54] = -1
+            else:
+                state_tensor = tokenizer.encode_state(s6x9_i)  # => shape=(54,)
+                tmp_src[i, :54] = state_tensor
+
+            if mv_i is None:
+                tmp_src[i, 54] = -1  # 表示没有 move
+            else:
+                mv_idx = tokenizer.encode_move(mv_i)
+                tmp_src[i, 54] = mv_idx
+
+        # 2) 编码 tgt_seq_raw（在此加入 [SOS_TOKEN], [EOS_TOKEN]）
+        tmp_tgt = torch.empty(seq_len, dtype=torch.long)
+        # 对于前 seq_len-1 个位置，用 "下一行的动作" 填充
+        for i in range(seq_len - 1):
+            # src_seq[i+1, 54] 就是下一时刻的动作
+            tmp_tgt[i] = tmp_src[i + 1, 54]
+        # 最后一项用 EOS
+        tmp_tgt[seq_len - 1] = EOS_TOKEN
+
+        src_list.append(tmp_src)
+        tgt_list.append(tmp_tgt)
+
+    # 3) 将 src_list 直接 stack（因为 history_len+1 固定）
+    src_tensor = torch.stack(src_list, dim=0)  # (B, history_len+1, 55)
+
+    # 4) 对 tgt_list 做 pad_sequence
+    tgt_tensor = torch.stack(tgt_list, dim=0)
+
+    return src_tensor, tgt_tensor
 
 
 def train_one_epoch_pact(model, dataloader, optimizer, criterion, device, epoch):
-    """
-    不再使用外部 tgt，而是从 src 的第 54 维提取标签
-    """
     model.train()
     total_loss = 0.0
     total_samples = 0
 
-    for src,tgt in tqdm(dataloader, desc=f"Training (epoch={epoch})"):
-        # 假设 dataloader 现在只返回 src
-        # 如果你原本 dataset 还有 (src, tgt)，就改成只返回 src 或忽略 tgt
+    for src, tgt in tqdm(dataloader, desc=f"Training (epoch={epoch})"):
         src = src.to(device, non_blocking=True)
         tgt = tgt.to(device, non_blocking=True)
 
         optimizer.zero_grad()
-
         with autocast():
             logits = model(src)  # => (B, 2T, vocab_size)
 
@@ -200,7 +246,6 @@ def evaluate_pact_freerun(model, dataloader, device, max_steps=50):
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # -- 1. Comet ML 初始化 --
     experiment = start(
         api_key=config.comet.api_key,
         project_name=config.comet.project_name,
@@ -208,47 +253,51 @@ def main():
     )
     experiment.log_parameters(OmegaConf.to_container(config, resolve=True))
 
-    # -- 2. Dataset & Dataloader --
-    train_dataset = RubikDatasetPACT(data_dir=config.data.train_dir,
-                                 num_samples=config.data.num_samples,
-                                 max_files=None)
+    # === 使用 RubikDatasetPACT + 我们自定义的 collate_fn ===
+    train_dataset = RubikDatasetPACT(
+        data_dir=config.data.train_dir,
+        num_samples=config.data.num_samples,
+        max_files=None
+    )
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.train.batch_size,
         shuffle=True,
-        collate_fn=collate_fn,
+        collate_fn=collate_fn,   # <-- 关键
         num_workers=config.train.num_workers,
         pin_memory=True,
         persistent_workers=True,
         prefetch_factor=config.train.prefetch_factor
     )
 
-    val_dataset = RubikDatasetPACT(data_dir=config.data.val_dir, num_samples=config.data.num_samples, max_files=None)
+    val_dataset = RubikDatasetPACT(
+        data_dir=config.data.val_dir,
+        num_samples=config.data.num_samples,
+        max_files=None
+    )
     val_loader = DataLoader(
         val_dataset,
         batch_size=config.train.batch_size,
         shuffle=False,
-        collate_fn=collate_fn,
+        collate_fn=collate_fn,   # <-- 关键
         num_workers=config.train.num_workers,
         pin_memory=True,
         persistent_workers=True,
         prefetch_factor=config.train.prefetch_factor
     )
 
-    # -- 3. 构建 PACT GPT 模型 --
+    # === 构建模型 & 优化器 ===
     model = RubikGPT(
         d_model=config.model.d_model,
         nhead=config.model.nhead,
         num_layers=config.model.num_layers,
         max_seq_len=config.model.max_seq_len,
-        ff_dim=config.model.d_model * 4,  # 例如 feedforward = 4*d_model
+        ff_dim=config.model.d_model * 4,
         dropout=config.model.dropout,
-        vocab_size=config.model.num_moves  # 假设要预测的动作数
-    )
-    model = model.to(device)
+        vocab_size=config.model.num_moves
+    ).to(device)
     log_model(experiment, model=model, model_name="PACT_RubikModel")
 
-    # -- 4. 优化器 & 损失 & 学习率调度 --
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=config.train.learning_rate, weight_decay=config.train.weight_decay)
     scheduler = LinearWarmupCosineAnnealingLR(
