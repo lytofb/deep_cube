@@ -67,28 +67,32 @@ class GNNTokenizer:
     并且对动作字符串也做 encode_move (保留或改写与原先兼容的逻辑)。
     """
     def __init__(self, edge_index, num_colors=6,
-                 gnn_hidden=64, gnn_out=128, gnn_layers=2):
+                 gnn_hidden=64, gnn_out=128, gnn_layers=2, device=None):
         """
         Args:
             edge_index: (2,E) 预先定义好的魔方贴纸邻接关系
             num_colors: 贴纸颜色总数(如 6)
             gnn_hidden, gnn_out: GCN hidden/out 维度
             gnn_layers: GCN层数
+            device: torch.device，例如 torch.device("cuda") 或 torch.device("cpu")
         """
-        self.edge_index = edge_index  # (2,E)
+        if device is None:
+            device = torch.device("cpu")
+        self.device = device
+        self.edge_index = edge_index.to(self.device)  # (2,E)
         self.num_colors = num_colors
 
         # 颜色embedding: 把每个节点颜色ID [0..5] => embed_dim
         self.embed_dim = 8  # 贴纸颜色的嵌入尺寸(示例)
         self.color_emb = nn.Embedding(num_embeddings=num_colors,
-                                      embedding_dim=self.embed_dim)
+                                      embedding_dim=self.embed_dim).to(self.device)
 
         self.gnn = SimpleGCN(
             in_dim=self.embed_dim,
             hidden_dim=gnn_hidden,
             out_dim=gnn_out,
             num_layers=gnn_layers
-        )
+        ).to(self.device)
 
         self.out_dim = gnn_out  # 最终图表示维度
 
@@ -100,7 +104,7 @@ class GNNTokenizer:
         # 1) 将 6x9 => node_colors: (N,)
         #    如果你现在还用 convert_state_to_tensor，则先把贴纸映射到 [0..5].
         #    这里示例直接把 s6x9 flatten 后当 colors
-        node_colors = torch.tensor(s6x9, dtype=torch.long)  # shape=(54,) (示例)
+        node_colors = torch.tensor(s6x9, dtype=torch.long, device=self.device)  # shape=(54,) (示例)
 
         # 2) color_emb => shape=(54, embed_dim)
         x = self.color_emb(node_colors)
