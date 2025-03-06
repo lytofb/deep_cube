@@ -263,7 +263,7 @@ def main():
         train_dataset,
         batch_size=config.train.batch_size,
         shuffle=True,
-        collate_fn=collate_fn,   # <-- 关键
+        # collate_fn=collate_fn,   # <-- 关键
         num_workers=config.train.num_workers,
         pin_memory=True,
         persistent_workers=True,
@@ -279,7 +279,7 @@ def main():
         val_dataset,
         batch_size=config.train.batch_size,
         shuffle=False,
-        collate_fn=collate_fn,   # <-- 关键
+        # collate_fn=collate_fn,   # <-- 关键
         num_workers=config.train.num_workers,
         pin_memory=True,
         persistent_workers=True,
