@@ -67,7 +67,7 @@ class GNNTokenizer:
     并且对动作字符串也做 encode_move (保留或改写与原先兼容的逻辑)。
     """
     def __init__(self, edge_index, num_colors=6,
-                 gnn_hidden=64, gnn_out=128, gnn_layers=2, device=None):
+                 gnn_hidden=64, gnn_out=128, gnn_layers=2):
         """
         Args:
             edge_index: (2,E) 预先定义好的魔方贴纸邻接关系
@@ -76,8 +76,7 @@ class GNNTokenizer:
             gnn_layers: GCN层数
             device: torch.device，例如 torch.device("cuda") 或 torch.device("cpu")
         """
-        if device is None:
-            device = torch.device("cpu")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.device = device
         self.edge_index = edge_index.to(self.device)  # (2,E)
         self.num_colors = num_colors
