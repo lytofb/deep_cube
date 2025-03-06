@@ -4,8 +4,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from utils import move_str_to_idx
-
 PAD_TOKEN = -1  # 仅作示例，用于 encode_move
 # 你可以把这和你的 dataset/dict constants 整合
 
@@ -112,9 +110,10 @@ class GNNTokenizer:
         return out.squeeze(0)  # => shape (out_dim,)
 
     def encode_move(self, mv):
-        # 可保持原先逻辑: if None => PAD, else => move_str_to_idx
+        # 延迟导入，避免循环依赖
+        from utils import move_str_to_idx
         if mv is None:
             return PAD_TOKEN
-        # 这里示例: 'U','U2','U'... => int
-        return move_str_to_idx(mv)  # 你已有 move_str_to_idx
+        return move_str_to_idx(mv)
+
 

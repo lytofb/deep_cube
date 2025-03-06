@@ -1,6 +1,10 @@
+# model_pact_transformer.py
 import torch
 import torch.nn as nn
 import einops
+from tokenizer.gnn_tokenizer import GNNTokenizer
+from utils import build_cube_edge_index
+
 
 class RubikGPT(nn.Module):
     """
@@ -23,8 +27,11 @@ class RubikGPT(nn.Module):
         super().__init__()
         self.d_model = d_model
 
+        edge_index = build_cube_edge_index()
+        self.tokenizer = GNNTokenizer(edge_index,gnn_out=d_model)
+
         # 1) 分别定义对 state(54维) 和 action(1维) 的线性映射
-        self.state_emb = nn.Linear(54, d_model)
+        # self.state_emb = nn.Linear(54, d_model)
         self.action_emb = nn.Linear(1,  d_model)
 
         # 2) 定义位置编码（PACT风格：global + local）
@@ -80,7 +87,8 @@ class RubikGPT(nn.Module):
         action = src[:, :, 54:].float()   # 最后一维 (B,T,1)
 
         # 2) 分别映射到 d_model 维度
-        state_emb  = self.state_emb(state)    # => (B,T,d_model)
+        state_emb = self.tokenizer.encode_state(state)
+        # state_emb  = self.state_emb(state)    # => (B,T,d_model)
         action_emb = self.action_emb(action)  # => (B,T,d_model)
 
         # 3) 拼接 token：先 stack => (B,T,2,d_model)，再 reshape => (B,2T,d_model)
