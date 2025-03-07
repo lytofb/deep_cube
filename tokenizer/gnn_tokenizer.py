@@ -97,20 +97,33 @@ class GNNTokenizer:
 
     def encode_state(self, s6x9):
         """
-        s6x9: 6x9 矩阵, 或 54 list, 存储颜色ID [0..5] (示例)
-        返回: shape (d_model,) 的向量 (或者 shape(1, d_model))
+        Supports input with shape (..., 54) — e.g., a single state of shape (54,), or a batch with shape (B, 54) or (B, T, 54).
+        Processes each state individually with the GNN and returns a tensor with shape (..., out_dim).
         """
-        # 1) 将 6x9 => node_colors: (N,)
-        #    如果你现在还用 convert_state_to_tensor，则先把贴纸映射到 [0..5].
-        #    这里示例直接把 s6x9 flatten 后当 colors
-        node_colors = torch.tensor(s6x9, dtype=torch.long, device=self.device)  # shape=(54,) (示例)
+        # Convert to tensor if needed.
+        if not torch.is_tensor(s6x9):
+            s6x9 = torch.as_tensor(s6x9, dtype=torch.long)
+        # Ensure the last dimension is 54.
+        if s6x9.shape[-1] != 54:
+            raise ValueError("The last dimension of s6x9 must be 54.")
 
-        # 2) color_emb => shape=(54, embed_dim)
-        x = self.color_emb(node_colors)
+        # Save the original batch shape (all dimensions except the last one).
+        original_shape = s6x9.shape[:-1]
+        s6x9_flat = s6x9.reshape(-1, 54)  # Shape: (N, 54) where N is the total number of states.
 
-        # 3) gnn => (1, out_dim)
-        out = self.gnn(x, self.edge_index)
-        return out.squeeze(0)  # => shape (out_dim,)
+        outputs = []
+        for state in s6x9_flat:
+            state = state.to(self.device)
+            # Get color embedding: (54, embed_dim)
+            node_colors = torch.as_tensor(state, dtype=torch.long, device=self.device)
+            x = self.color_emb(node_colors)
+            # Process through GNN: output shape (1, out_dim)
+            out = self.gnn(x, self.edge_index)
+            outputs.append(out.squeeze(0))  # Squeeze to shape (out_dim,)
+
+        out_tensor = torch.stack(outputs, dim=0)  # Shape: (N, out_dim)
+        # Restore the original batch dimensions: (..., out_dim)
+        out_tensor = out_tensor.reshape(*original_shape, self.out_dim)
 
     def encode_move(self, mv):
         # 延迟导入，避免循环依赖
