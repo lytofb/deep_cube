@@ -151,6 +151,11 @@ def main():
         max_seq_len=config.model.max_seq_len,
         dropout=config.model.dropout
     )
+    # 如果有多张 GPU
+    if torch.cuda.device_count() > 1:
+        print(f"使用 {torch.cuda.device_count()} 张 GPU 进行 DataParallel")
+        model = nn.DataParallel(model)
+
     model = model.to(device)
 
     log_model(experiment, model=model, model_name="TheModel")
