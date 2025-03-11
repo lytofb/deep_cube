@@ -11,6 +11,13 @@ from tqdm import tqdm
 
 from torch.profiler import profile, record_function, ProfilerActivity
 
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+import os
+
+
 from dataset_rubik import RubikDataset, collate_fn
 from models.model_history_transformer import RubikSeq2SeqTransformer
 
@@ -207,5 +214,95 @@ def main():
     print("训练结束，已保存最终模型为 rubik_model_final.pth")
 
 
+def main_ddp():
+    """
+    DDP 多卡训练入口函数
+    """
+    # 获取 local_rank
+    local_rank = int(os.environ["LOCAL_RANK"])
+
+    # 初始化进程组
+    dist.init_process_group(backend="nccl")
+    torch.cuda.set_device(local_rank)
+    device = torch.device("cuda", local_rank)
+
+    experiment = start(
+      api_key=config.comet.api_key,
+      project_name=config.comet.project_name,
+      workspace=config.comet.workspace
+    )
+
+    # 1. Dataset & DataLoader
+    train_dataset = RubikDataset(...)
+    val_dataset = RubikDataset(...)
+
+    # 使用 DistributedSampler
+    train_sampler = DistributedSampler(train_dataset)
+    val_sampler = DistributedSampler(val_dataset, shuffle=False)
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config.train.batch_size,
+        shuffle=False,  # 注意，这里需要 False，分布式时用 sampler 控制 shuffle
+        sampler=train_sampler,
+        collate_fn=collate_fn,
+        num_workers=config.train.num_workers,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=config.train.prefetch_factor
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config.train.batch_size,
+        shuffle=False,
+        sampler=val_sampler,
+        collate_fn=collate_fn,
+        num_workers=config.train.num_workers,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=config.train.prefetch_factor
+    )
+
+    # 2. Model
+    model = RubikSeq2SeqTransformer(...)
+    model = model.to(device)
+
+    # 用 DDP 包装
+    model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+
+    # 3. Optimizer & Loss
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=config.train.learning_rate, weight_decay=config.train.weight_decay)
+
+    scheduler = LinearWarmupCosineAnnealingLR(
+        optimizer,
+        warmup_epochs=config.train.warmup_epochs,
+        max_epochs=config.train.max_epochs
+    )
+
+    # 4. Training loop
+    epochs = config.train.max_epochs
+    best_val_acc = 0.0
+
+    for epoch in range(1, epochs + 1):
+        # 分布式训练时，每个 epoch 都要在 sampler 上设置一下随机种子
+        train_sampler.set_epoch(epoch)
+
+        avg_loss = train_one_epoch_seq2seq(model, train_loader, optimizer, criterion, device, epoch, epochs)
+        scheduler.step()
+        current_lr = scheduler.get_last_lr()[0]
+
+        # 只让 rank=0 的进程打印或做验证/保存模型
+        if dist.get_rank() == 0:
+            print(f"Epoch {epoch}, Loss={avg_loss:.4f}, LR={current_lr:.6f}")
+            val_acc = evaluate_seq2seq_accuracy(model, val_loader, device)
+            print(f"[Validation] Epoch {epoch}, Val_Acc={val_acc:.4f}")
+            # ... 这里也可以做一些 if epoch % 50 == 0: 保存模型 的操作 ...
+
+    # 结束
+    dist.destroy_process_group()
+
+
 if __name__ == "__main__":
-    main()
+    main_ddp()
+
