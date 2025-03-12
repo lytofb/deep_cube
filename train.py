@@ -277,29 +277,9 @@ def main_ddp():
 
     # 1. Dataset & DataLoader
     train_dataset = RubikDataset(data_dir=config.data.train_dir, num_samples=config.data.num_samples, max_files=None)
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=config.train.batch_size,
-        shuffle=True,
-        collate_fn=collate_fn,
-        num_workers=config.train.num_workers,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=config.train.prefetch_factor
-    )
 
     # ====== 新增验证集，假设放在 'rubik_val_shards' 目录 ======
     val_dataset = RubikDataset(data_dir=config.data.val_dir, max_files=None)
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=config.train.batch_size,
-        shuffle=False,
-        collate_fn=collate_fn,
-        num_workers=config.train.num_workers,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=config.train.prefetch_factor
-    )
 
     # 使用 DistributedSampler
     train_sampler = DistributedSampler(train_dataset)
