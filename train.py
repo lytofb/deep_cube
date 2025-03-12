@@ -31,7 +31,50 @@ config = OmegaConf.load("config.yaml")
 scaler = GradScaler()
 
 
-def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device, epoch, total_epochs):
+def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device):
+    model.train()
+    total_loss = 0.0
+
+    for src, tgt in tqdm(dataloader, desc="Training"):
+        # src: (B, src_seq_len, 55)，tgt: (B, tgt_seq_len)
+        src = src.to(device, non_blocking=True)
+        tgt = tgt.to(device, non_blocking=True)
+
+        optimizer.zero_grad()
+
+        # Teacher Forcing：外部切片
+        decoder_input = tgt[:, :-1]  # (B, tgt_seq_len - 1)
+        target_output = tgt[:, 1:]   # (B, tgt_seq_len - 1)
+
+        # 前向传播
+        logits = model(src, decoder_input)  # => (B, tgt_seq_len-1, num_moves)
+
+        # 展平计算损失
+        B, seq_len, num_moves = logits.shape
+
+        # 使用混合后的输入进行前向传播，计算最终 loss
+        with autocast():
+            logits = model(src, decoder_input)  # (B, seq_len-1, num_moves)
+            loss = criterion(logits.view(-1, logits.size(-1)), target_output.contiguous().view(-1))
+
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+
+        total_loss += loss.item() * tgt.size(0)
+
+        # logits = logits.reshape(-1, num_moves)       # => (B*(seq_len-1), num_moves)
+        # target_output = target_output.reshape(-1)    # => (B*(seq_len-1))
+        #
+        # loss = criterion(logits, target_output)
+        # loss.backward()
+        # optimizer.step()
+        #
+        # total_loss += loss.item() * src.size(0)
+
+    return total_loss / len(dataloader.dataset)
+
+def train_one_epoch_seq2seq_mix(model, dataloader, optimizer, criterion, device, epoch, total_epochs):
     model.train()
     total_loss = 0.0
 
@@ -182,7 +225,7 @@ def main():
     best_val_acc = 0.0  # 记录验证集准确率的最高值
 
     for epoch in range(1, epochs+1):
-        avg_loss = train_one_epoch_seq2seq(model, train_loader, optimizer, criterion, device ,epoch ,epochs)
+        avg_loss = train_one_epoch_seq2seq(model, train_loader, optimizer, criterion, device)
         scheduler.step()
         current_lr = scheduler.get_last_lr()[0]
 
@@ -233,8 +276,30 @@ def main_ddp():
     )
 
     # 1. Dataset & DataLoader
-    train_dataset = RubikDataset(...)
-    val_dataset = RubikDataset(...)
+    train_dataset = RubikDataset(data_dir=config.data.train_dir, num_samples=config.data.num_samples, max_files=None)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config.train.batch_size,
+        shuffle=True,
+        collate_fn=collate_fn,
+        num_workers=config.train.num_workers,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=config.train.prefetch_factor
+    )
+
+    # ====== 新增验证集，假设放在 'rubik_val_shards' 目录 ======
+    val_dataset = RubikDataset(data_dir=config.data.val_dir, max_files=None)
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config.train.batch_size,
+        shuffle=False,
+        collate_fn=collate_fn,
+        num_workers=config.train.num_workers,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=config.train.prefetch_factor
+    )
 
     # 使用 DistributedSampler
     train_sampler = DistributedSampler(train_dataset)
@@ -264,7 +329,15 @@ def main_ddp():
     )
 
     # 2. Model
-    model = RubikSeq2SeqTransformer(...)
+    model = RubikSeq2SeqTransformer(
+        num_layers=config.model.num_layers,
+        d_model=config.model.d_model,
+        input_dim=config.model.input_dim,
+        nhead=config.model.nhead,
+        num_moves=config.model.num_moves,
+        max_seq_len=config.model.max_seq_len,
+        dropout=config.model.dropout
+    )
     model = model.to(device)
 
     # 用 DDP 包装
@@ -288,7 +361,7 @@ def main_ddp():
         # 分布式训练时，每个 epoch 都要在 sampler 上设置一下随机种子
         train_sampler.set_epoch(epoch)
 
-        avg_loss = train_one_epoch_seq2seq(model, train_loader, optimizer, criterion, device, epoch, epochs)
+        avg_loss = train_one_epoch_seq2seq(model, train_loader, optimizer, criterion, device)
         scheduler.step()
         current_lr = scheduler.get_last_lr()[0]
 
