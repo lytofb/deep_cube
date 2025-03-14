@@ -44,7 +44,15 @@ class CubeTokenizer:
         return digits
 
     def state54_to_cubie_state_ULFRBD(self, state_faces):
-        # 修改说明：假定 state_faces 顺序为 [U, L, F, R, B, D]
+        """
+        假定 state_faces 顺序为 [U, L, F, R, B, D]，
+        每个面按行优先展开，共 9 个贴纸。
+        返回一个字典，包含：
+          - corner_permutation: 角块排列（长度 8 的列表）
+          - corner_orientation: 角块朝向（长度 8 的列表）
+          - edge_permutation: 棱块排列（长度 12 的列表）
+          - edge_orientation: 棱块朝向（长度 12 的列表）
+        """
         flat = [color for face in state_faces for color in face]
         centers = {
             'U': flat[4],
@@ -55,28 +63,29 @@ class CubeTokenizer:
             'D': flat[49],
         }
         cornerFacelet = [
-            [8, 27, 20],   # URF
-            [6, 18, 11],   # UFL
-            [0, 9, 38],    # ULB
-            [2, 36, 29],   # UBR
-            [53, 26, 35],  # DFR
+            [8, 27, 20],  # URF
+            [6, 18, 11],  # UFL
+            [0, 9, 38],  # ULB
+            [2, 36, 29],  # UBR
+            [47, 26, 33],  # DFR
             [45, 17, 24],  # DLF
             [51, 44, 15],  # DBL
-            [47, 33, 42],  # DRB
+            [53, 35, 42],  # DRB
         ]
+        # 对于边块，上下层边保持原来的定义；中层边调整 facelet 顺序
         edgeFacelet = [
-            [5, 28],   # UR
-            [7, 19],   # UF
-            [3, 10],   # UL
-            [1, 37],   # UB
+            [5, 28],  # UR
+            [7, 19],  # UF
+            [3, 10],  # UL
+            [1, 37],  # UB
             [50, 34],  # DR
             [46, 25],  # DF
             [48, 16],  # DL
             [52, 43],  # DB
-            [23, 30],  # FR
-            [21, 14],  # FL
-            [12, 41],  # BL
-            [42, 32],  # BR
+            [30, 23],  # FR (原来 [23, 30]，现交换顺序)
+            [14, 21],  # FL (原来 [21, 14]，现交换顺序)
+            [12, 41],  # BL (原来 [41, 12]，现交换顺序)
+            [32, 39],  # BR (原来 [42, 32]，现交换顺序)
         ]
         solvedCorners = [
             [centers['U'], centers['R'], centers['F']],  # URF
@@ -88,6 +97,7 @@ class CubeTokenizer:
             [centers['D'], centers['B'], centers['L']],  # DBL
             [centers['D'], centers['R'], centers['B']],  # DRB
         ]
+        # 对于边块，上下层边保持原来顺序；中层边采用交换后的顺序
         solvedEdges = [
             [centers['U'], centers['R']],  # UR
             [centers['U'], centers['F']],  # UF
@@ -97,10 +107,10 @@ class CubeTokenizer:
             [centers['D'], centers['F']],  # DF
             [centers['D'], centers['L']],  # DL
             [centers['D'], centers['B']],  # DB
-            [centers['F'], centers['R']],  # FR
-            [centers['F'], centers['L']],  # FL
-            [centers['B'], centers['L']],  # BL
-            [centers['B'], centers['R']],  # BR
+            [centers['R'], centers['F']],  # FR (交换后)
+            [centers['L'], centers['F']],  # FL (交换后)
+            [centers['L'], centers['B']],  # BL (交换后)
+            [centers['R'], centers['B']],  # BR (交换后)
         ]
         corner_perm = [None] * 8
         corner_orient = [None] * 8
@@ -120,7 +130,7 @@ class CubeTokenizer:
                     if found:
                         break
             if not found:
-                raise ValueError(f"未能匹配角块{i}的颜色: {colors}")
+                raise ValueError(f"未能匹配角块 {i} 的颜色: {colors}")
         edge_perm = [None] * 12
         edge_orient = [None] * 12
         for i in range(12):
@@ -128,14 +138,18 @@ class CubeTokenizer:
             found = False
             for j in range(12):
                 solved = solvedEdges[j]
-                if sorted(colors) == sorted(solved):
-                    orient = 0 if colors[0] in (centers['U'], centers['D']) else 1
+                if colors == solved:
                     edge_perm[i] = j
-                    edge_orient[i] = orient
+                    edge_orient[i] = 0
+                    found = True
+                    break
+                elif colors[::-1] == solved:
+                    edge_perm[i] = j
+                    edge_orient[i] = 1
                     found = True
                     break
             if not found:
-                raise ValueError(f"未能匹配棱块{i}的颜色: {colors}")
+                raise ValueError(f"未能匹配棱块 {i} 的颜色: {colors}")
         return {
             'corner_permutation': corner_perm,
             'corner_orientation': corner_orient,
@@ -188,12 +202,48 @@ def state54_to_cubie_tokens(state_faces):
     tokens = tokenizer.encode_state(state_faces)
     return tokens
 
+def validate_solved_state():
+    """
+    构造一个已解魔方的6×9状态：
+      面顺序为 [U, L, F, R, B, D]，
+      颜色约定：U: white (w), L: orange (o), F: green (g),
+               R: red (r), B: blue (b), D: yellow (y)
+    理想情况下，已解魔方的 cubie state 应该为：
+      corner_permutation = [0, 1, 2, 3, 4, 5, 6, 7]
+      corner_orientation = [0, 0, 0, 0, 0, 0, 0, 0]
+      edge_permutation   = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+      edge_orientation   = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    """
+    # 构造已解状态：每个面全为该面的颜色
+    solved_state = [
+        ["w"] * 9,  # U
+        ["o"] * 9,  # L
+        ["g"] * 9,  # F
+        ["r"] * 9,  # R
+        ["b"] * 9,  # B
+        ["y"] * 9   # D
+    ]
+    try:
+        tokenizer = CubeTokenizer()
+        cubie_state = tokenizer.state54_to_cubie_state_ULFRBD(solved_state)
+        print("验证已解魔方状态得到的 cubie state：")
+        print("角块排列：", cubie_state['corner_permutation'])
+        print("角块朝向：", cubie_state['corner_orientation'])
+        print("棱块排列：", cubie_state['edge_permutation'])
+        print("棱块朝向：", cubie_state['edge_orientation'])
+    except Exception as e:
+        print("调用 state54_to_cubie_state_ULFRBD 时出错：", e)
+
+
+# if __name__ == "__main__":
+#     validate_solved_state()
+
 
 
 # 示例用法
 if __name__ == "__main__":
     # 输入状态为6个面，每个面9个元素（顺序：U, R, F, D, L, B）
-    # 帮我修改一下，顺序是ULFRBD
+    # 帮我修改一下，顺序是ULFRBD，在帮我修改一下，实际上是UFRBLD
     # state = [
     #     ['w', 'w', 'w', 'w', 'w', 'w', 'w', 'w', 'w'],
     #     ['r', 'r', 'r', 'r', 'r', 'r', 'r', 'r', 'r'],
@@ -202,18 +252,21 @@ if __name__ == "__main__":
     #     ['g', 'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g'],
     #     ['y', 'y', 'y', 'y', 'y', 'y', 'y', 'y', 'y']
     # ]
-    state = [
-        ['r', 'w', 'y', 'w', 'y', 'y', 'w', 'o', 'b'],
-        ['y', 'g', 'g', 'y', 'r', 'r', 'w', 'r', 'g'],
-        ['r', 'g', 'o', 'b', 'g', 'b', 'o', 'w', 'b'],
-        ['w', 'o', 'o', 'y', 'o', 'o', 'y', 'r', 'o'],
-        ['b', 'o', 'g', 'b', 'b', 'g', 'g', 'r', 'r'],
-        ['w', 'b', 'r', 'y', 'w', 'g', 'b', 'w', 'y']
-    ]
-    try:
-        tokens = state54_to_cubie_tokens(state)
-        print("转换后得到的Token：")
-        for key, value in tokens.items():
-            print(f"{key}: {value}")
-    except ValueError as e:
-        print("转换错误：", e)
+    from dataset_rubik_seq import generate_single_case
+    states = generate_single_case()["steps"]
+    # state = [
+    #     ['r', 'w', 'y', 'w', 'y', 'y', 'w', 'o', 'b'],
+    #     ['y', 'g', 'g', 'y', 'r', 'r', 'w', 'r', 'g'],
+    #     ['r', 'g', 'o', 'b', 'g', 'b', 'o', 'w', 'b'],
+    #     ['w', 'o', 'o', 'y', 'o', 'o', 'y', 'r', 'o'],
+    #     ['b', 'o', 'g', 'b', 'b', 'g', 'g', 'r', 'r'],
+    #     ['w', 'b', 'r', 'y', 'w', 'g', 'b', 'w', 'y']
+    # ]
+    for state in states:
+        try:
+            tokens = state54_to_cubie_tokens(state[0])
+            # print("转换后得到的Token：")
+            # for key, value in tokens.items():
+            #     print(f"{key}: {value}")
+        except ValueError as e:
+            print("转换错误：", e)
