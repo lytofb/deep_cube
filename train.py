@@ -53,18 +53,17 @@ def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device):
         decoder_input = tgt[:, :-1]  # (B, tgt_seq_len - 1)
         target_output = tgt[:, 1:]   # (B, tgt_seq_len - 1)
 
-        # 前向传播
-        logits = model(src, decoder_input)  # => (B, tgt_seq_len-1, num_moves)
-
-        # 展平计算损失
-        B, seq_len, num_moves = logits.shape
-
         # 使用混合后的输入进行前向传播，计算最终 loss
         with autocast():
             logits = model(src, decoder_input)  # (B, seq_len-1, num_moves)
             loss = criterion(logits.view(-1, logits.size(-1)), target_output.contiguous().view(-1))
 
         scaler.scale(loss).backward()
+        # 先反缩放梯度
+        scaler.unscale_(optimizer)
+        # 执行梯度裁剪，clip_value 可根据需要调整（例如 1.0）
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
         scaler.step(optimizer)
         scaler.update()
 
@@ -360,7 +359,27 @@ def main_ddp():
             val_acc = evaluate_seq2seq_accuracy(model, val_loader, device)
             print(f"[Validation] Epoch {epoch}, Val_Acc={val_acc:.4f}")
             # ... 这里也可以做一些 if epoch % 50 == 0: 保存模型 的操作 ...
+            # 每 50 个 epoch 做一次验证
+            if epoch % 50 == 0:
 
+                # 保存当前 epoch 的模型
+                ckpt_path = f"rubik_model_epoch{epoch}.pth"
+                torch.save(model.state_dict(), ckpt_path)
+                print(f"已保存模型到 {ckpt_path}")
+
+                # 如果比最优准确率更高，则更新 best 并另存一份
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
+                    torch.save(model.state_dict(), "rubik_model_best.pth")
+                    print(f"当前准确率最好 ({val_acc:.4f})，已更新 rubik_model_best.pth")
+
+            experiment.log_metric("train_loss", avg_loss, step=epoch)
+            experiment.log_metric("lr", current_lr, step=epoch)
+            experiment.log_metric("val_accuracy", val_acc, step=epoch)
+
+    # 最后再保存一次 (可选)
+    torch.save(model.state_dict(), "rubik_model_final.pth")
+    print("训练结束，已保存最终模型为 rubik_model_final.pth")
     # 结束
     dist.destroy_process_group()
 
