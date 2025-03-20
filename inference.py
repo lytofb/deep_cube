@@ -1,4 +1,5 @@
 # inference_seq2seq.py
+from collections import OrderedDict
 
 import torch
 import random
@@ -201,7 +202,13 @@ def main():
         max_seq_len=config.model.max_seq_len,
         dropout=config.model.dropout
     )
-    model.load_state_dict(torch.load(config.inference.model_path, map_location=device))
+    new_state_dict = OrderedDict()
+    state_dict = torch.load(config.inference.model_path, map_location=device)
+    for k, v in state_dict.items():
+        new_key = k.replace("module.", "")
+        new_state_dict[new_key] = v
+    model.load_state_dict(new_state_dict)
+    # model.load_state_dict(torch.load(config.inference.model_path, map_location=device))
     model.to(device)
     model.eval()
 
