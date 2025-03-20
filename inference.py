@@ -3,6 +3,7 @@
 import torch
 import random
 import pycuber as pc
+import torch.nn.functional as F
 
 # 注意：从你的 seq2seq 模型文件导入
 from models.model_history_transformer import RubikSeq2SeqTransformer
@@ -68,6 +69,89 @@ def build_src_tensor_from_cube(cube):
     combined_55 = combined_55.unsqueeze(0).unsqueeze(0)
     return combined_55  # (1,1,55)
 
+@torch.no_grad()
+def beam_search(model, src, beam_size=3, max_steps=50):
+    """
+    对单条样本(batch=1)使用 Beam Search 产生动作序列（不含 SOS/EOS）。
+
+    参数:
+      model: seq2seq 模型
+      src: 输入 tensor，形状 (1, src_seq_len, feature_dim)
+      beam_size: 每步扩展的候选数量
+      max_steps: 最大解码步数
+
+    返回:
+      List[int]，预测出的 move token 序列
+    """
+    device = src.device
+    model.eval()
+
+    # 初始 decoder 输入: [SOS_TOKEN]，注意这里不把 SOS_TOKEN 放入最终预测序列
+    initial_decoder = torch.tensor([[SOS_TOKEN]], dtype=torch.long, device=device)
+
+    # 每个候选分支记录：decoder_input、累计对数概率、以及已生成 token 序列（不含 SOS）
+    beam = [{
+        "decoder_input": initial_decoder,
+        "score": 0.0,
+        "tokens": []
+    }]
+    finished_candidates = []
+
+    for _ in range(max_steps):
+        new_beam = []
+        for candidate in beam:
+            decoder_input = candidate["decoder_input"]  # shape: (1, current_seq_len)
+            # 模型前向，输出 logits, 形状: (1, seq_len, num_moves)
+            logits = model(src, decoder_input)
+            # 取最后时刻的 logits，形状: (1, num_moves)
+            last_logits = logits[:, -1, :]
+            # 计算 softmax 概率
+            probs = F.softmax(last_logits, dim=-1)
+            # 选取 topk 个候选动作
+            topk_probs, topk_indices = torch.topk(probs, k=beam_size, dim=-1)
+            topk_probs = topk_probs.squeeze(0)  # (beam_size,)
+            topk_indices = topk_indices.squeeze(0)  # (beam_size,)
+
+            # 对于每个候选动作，扩展新的候选分支
+            for prob, token in zip(topk_probs, topk_indices):
+                token_id = token.item()
+                new_score = candidate["score"] + torch.log(prob).item()
+                new_tokens = candidate["tokens"] + [token_id]
+                # 将新 token 添加到 decoder 输入中
+                new_decoder_input = torch.cat(
+                    [decoder_input, token.unsqueeze(0).unsqueeze(0)], dim=1
+                )
+
+                # 如果生成 EOS 或 PAD，则认为该候选结束，将其存入 finished_candidates
+                if token_id == EOS_TOKEN or token_id == PAD_TOKEN:
+                    finished_candidates.append({
+                        "decoder_input": new_decoder_input,
+                        "score": new_score,
+                        "tokens": new_tokens
+                    })
+                else:
+                    new_beam.append({
+                        "decoder_input": new_decoder_input,
+                        "score": new_score,
+                        "tokens": new_tokens
+                    })
+
+        # 若没有新的候选分支，则退出循环
+        if not new_beam:
+            break
+
+        # 从扩展的候选中选择得分最高的 beam_size 个
+        beam = sorted(new_beam, key=lambda x: x["score"], reverse=True)[:beam_size]
+
+    # 如果有结束候选，返回得分最高的，否则返回当前 beam 中得分最高的候选
+    if finished_candidates:
+        best_candidate = sorted(finished_candidates, key=lambda x: x["score"], reverse=True)[0]
+    else:
+        best_candidate = sorted(beam, key=lambda x: x["score"], reverse=True)[0]
+
+    return best_candidate["tokens"]
+
+@torch.no_grad()
 def greedy_decode_seq2seq(model, src, max_len=50):
     """
     对单条样本(batch=1)使用贪心解码产生动作序列（不含 SOS/EOS）。
@@ -129,7 +213,8 @@ def main():
     # 3. 构造 src
     src_tensor = build_src_tensor_from_cube(cube).to(device)
     # 4. 用 seq2seq 进行贪心解码，生成还原动作序列
-    pred_tokens = greedy_decode_seq2seq(model, src_tensor, max_len=config.inference.max_len)
+    # pred_tokens = greedy_decode_seq2seq(model, src_tensor, max_len=config.inference.max_len)
+    pred_tokens = beam_search(model, src_tensor, max_len=config.inference.max_len)
     print(f"Predicted tokens: {pred_tokens}")
     # 转成字符串动作
     pred_moves = []
