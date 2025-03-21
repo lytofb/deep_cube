@@ -12,7 +12,7 @@ from utils import (
     MOVES_POOL,
     MOVE_TO_IDX,
     PAD_TOKEN,
-    MASK_TOKEN,
+    MASK_OR_NOMOVE_TOKEN,
     EOS_TOKEN,
     SOS_TOKEN,
     VOCAB_SIZE,
@@ -56,7 +56,7 @@ class RubikDiffusionDataset(Dataset):
 #########################################
 class DiscreteDiffusionLM:
     def __init__(self,
-                 mask_id=MASK_TOKEN,  # 改用MASK_TOKEN=19
+                 mask_id=MASK_OR_NOMOVE_TOKEN,  # 改用MASK_TOKEN=19
                  schedule_start=0.1,
                  schedule_end=0.7,
                  num_steps=10):
@@ -165,7 +165,7 @@ def train_diffusion_lm_condition():
 
     # 2) Diffusion + 模型
     diffusion = DiscreteDiffusionLM(
-        mask_id=MASK_TOKEN,        # 仅用于噪声
+        mask_id=MASK_OR_NOMOVE_TOKEN,        # 仅用于噪声
         schedule_start=0.1,
         schedule_end=0.7,
         num_steps=10

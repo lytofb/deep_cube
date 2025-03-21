@@ -19,7 +19,7 @@ from utils import (
     MOVES_POOL,
     MOVE_TO_IDX,
     PAD_TOKEN,
-    MASK_TOKEN,
+    MASK_OR_NOMOVE_TOKEN,
     EOS_TOKEN,
     SOS_TOKEN,
     VOCAB_SIZE,
@@ -140,7 +140,7 @@ def train_diffusion_lm_condition():
 
     # 2) Diffusion 模块与模型
     diffusion = DiscreteDiffusionLM(
-        mask_id=MASK_TOKEN,  # 仅用于噪声
+        mask_id=MASK_OR_NOMOVE_TOKEN,  # 仅用于噪声
         schedule_start=config.diffusion.schedule_start,
         schedule_end=config.diffusion.schedule_end,
         num_steps=config.diffusion.num_steps

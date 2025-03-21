@@ -8,11 +8,10 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
-from torch.profiler import profile, record_function, ProfilerActivity
+import random
+from utils import PAD_TOKEN
 
 import torch.distributed as dist
-import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 import os
@@ -156,6 +155,62 @@ def evaluate_seq2seq_accuracy(model, dataloader, device):
         return 0.0
     return total_correct / total_count
 
+def create_collate_fn_random_trunc(max_history_len: int, pad_token: int = PAD_TOKEN):
+    """
+    返回一个 collate_fn 函数，用于在批处理中对 src 序列随机截断到 [0, max_history_len]，
+    并对不足部分填充 PAD。
+
+    Args:
+        max_history_len: 截断后的最大长度，如 8
+        pad_token: 用于填充的 token 索引
+
+    Returns:
+        collate_fn_random_trunc: 一个可供 DataLoader 调用的函数
+    """
+
+    def collate_fn_random_trunc(batch):
+        """
+        batch: List of (src, tgt)
+               - src: shape (src_seq_len, input_dim) 或者 (src_seq_len,) 的索引
+               - tgt: shape (tgt_seq_len,) 的索引
+        """
+        batch_src = []
+        batch_tgt = []
+
+        for src_item, tgt_item in batch:
+            # ---------- 随机截断 ----------
+            actual_len = src_item.shape[0]  # 如果 src_item 是二维 (seq_len, input_dim)，就取 seq_len
+            k = random.randint(0, max_history_len)  # 在 [0, max_history_len] 范围内随机
+            k = min(k, actual_len)  # 确保不会超过实际长度
+
+            truncated_src = src_item[:k]  # 截断
+
+            # ---------- Pad 到固定长度 max_history_len ----------
+            pad_size = max_history_len - k
+            if pad_size > 0:
+                # 如果 src_item是 (seq_len, input_dim)，则需要构造一个 (pad_size, input_dim) 的填充
+                # 并只在“最后一列/某一列”标注 pad_token；下面是示意写法，需根据你实际格式调整
+                pad_part = torch.zeros((pad_size, truncated_src.shape[1]), dtype=truncated_src.dtype)
+                # 假设最后一列是 move token，才需要填 pad_token
+                pad_part[:, -1] = pad_token
+                truncated_src = torch.cat([truncated_src, pad_part], dim=0)
+
+            # 对 tgt_item 是否也要随机截断，看你需求而定，下面示例保留原样
+            # 如果需要对 tgt_item 做 pad 到固定长度，也可参照类似写法
+            batch_src.append(truncated_src)
+            batch_tgt.append(tgt_item)
+
+        # ---------- 组装 batch ----------
+        batch_src = torch.stack(batch_src, dim=0)  # (B, max_history_len, input_dim)
+        # 假设 tgt_item 是 1D token 序列，不同长度 => pad_sequence 统一长度
+        batch_tgt = torch.nn.utils.rnn.pad_sequence(
+            batch_tgt, batch_first=True, padding_value=pad_token
+        )
+
+        return batch_src, batch_tgt
+
+    return collate_fn_random_trunc
+
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -170,13 +225,22 @@ def main():
     # 记录所有超参数
     experiment.log_parameters(OmegaConf.to_container(config, resolve=True))
 
+    # 1) 先根据 config 创建一个 collate_fn
+    my_collate_fn_random_trunc = create_collate_fn_random_trunc(
+        max_history_len=config.data.max_history_len,  # 例如 8
+        pad_token=PAD_TOKEN  # 或其它值
+    )
+
     # 1. Dataset & DataLoader
-    train_dataset = RubikDataset(data_dir=config.data.train_dir, num_samples=config.data.num_samples, max_files=None)
+    train_dataset = RubikDataset(data_dir=config.data.train_dir,
+                                 history_len=config.data.max_history_len,
+                                 num_samples=config.data.num_samples,
+                                 max_files=None)
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.train.batch_size,
         shuffle=True,
-        collate_fn=collate_fn,
+        collate_fn=my_collate_fn_random_trunc,
         num_workers=config.train.num_workers,
         pin_memory=True,
         persistent_workers=True,
@@ -184,7 +248,9 @@ def main():
     )
 
     # ====== 新增验证集，假设放在 'rubik_val_shards' 目录 ======
-    val_dataset = RubikDataset(data_dir=config.data.val_dir, max_files=None)
+    val_dataset = RubikDataset(data_dir=config.data.val_dir,
+                               history_len=config.data.max_history_len,
+                               max_files=None)
     val_loader = DataLoader(
         val_dataset,
         batch_size=config.train.batch_size,
@@ -283,21 +349,32 @@ def main_ddp():
     )
 
     # 1. Dataset & DataLoader
-    train_dataset = RubikDataset(data_dir=config.data.train_dir, num_samples=config.data.num_samples, max_files=None)
+    train_dataset = RubikDataset(data_dir=config.data.train_dir,
+                                 history_len=config.data.max_history_len,
+                                 num_samples=config.data.num_samples,
+                                 max_files=None)
 
     # ====== 新增验证集，假设放在 'rubik_val_shards' 目录 ======
-    val_dataset = RubikDataset(data_dir=config.data.val_dir, max_files=None)
+    val_dataset = RubikDataset(data_dir=config.data.val_dir,
+                               history_len=config.data.max_history_len,
+                               max_files=None)
 
     # 使用 DistributedSampler
     train_sampler = DistributedSampler(train_dataset)
     val_sampler = DistributedSampler(val_dataset, shuffle=False)
+
+    # 1) 先根据 config 创建一个 collate_fn
+    my_collate_fn_random_trunc = create_collate_fn_random_trunc(
+        max_history_len=config.data.max_history_len,  # 例如 8
+        pad_token=PAD_TOKEN  # 填充截断的TOKEN
+    )
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.train.batch_size,
         shuffle=False,  # 注意，这里需要 False，分布式时用 sampler 控制 shuffle
         sampler=train_sampler,
-        collate_fn=collate_fn,
+        collate_fn=my_collate_fn_random_trunc,
         num_workers=config.train.num_workers,
         pin_memory=True,
         persistent_workers=True,

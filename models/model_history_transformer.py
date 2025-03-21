@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
-
-from utils import PAD_TOKEN
-
+from utils import PAD_TOKEN,VOCAB_SIZE
 
 class RubikSeq2SeqTransformer(nn.Module):
     """
@@ -21,7 +19,7 @@ class RubikSeq2SeqTransformer(nn.Module):
                  d_model=128,
                  nhead=4,
                  num_layers=12,
-                 num_moves=21,
+                 num_moves=VOCAB_SIZE,
                  max_seq_len=50,
                  dropout = 0.3,
                  ):
@@ -53,7 +51,7 @@ class RubikSeq2SeqTransformer(nn.Module):
         self.src_pos_embedding = nn.Embedding(max_seq_len, d_model)
 
         # Decoder：对 move 索引进行嵌入，并加上位置编码
-        self.tgt_embedding = nn.Embedding(num_moves, d_model, padding_idx=19)
+        self.tgt_embedding = nn.Embedding(num_moves, d_model, padding_idx=PAD_TOKEN)
         self.tgt_pos_embedding = nn.Embedding(max_seq_len, d_model)
 
         # Transformer 模型（包含 Encoder 和 Decoder）
@@ -87,6 +85,12 @@ class RubikSeq2SeqTransformer(nn.Module):
         B, src_seq_len, _ = src.shape
         B, tgt_seq_len_minus1 = tgt_input.shape
 
+        # =========== 构建 Key Padding Mask ===========
+        # 如果你的设计里, src[..., -1] 存放的是 token 索引，则下面这样判断
+        # 否则要根据你的实际数据格式改写
+        src_tokens = src[..., -1].long()           # (B, src_seq_len)
+        src_key_padding_mask = (src_tokens == PAD_TOKEN)  # True 表示 padding，需要屏蔽
+
         # ------- Encoder 部分保持不变 -------
         src = src.permute(1, 0, 2).float()  # => (src_seq_len, B, d_model)
         src = self.src_linear(src)
@@ -113,8 +117,7 @@ class RubikSeq2SeqTransformer(nn.Module):
             src=src,
             tgt=tgt_emb,
             tgt_mask=tgt_mask,
-            # src_key_padding_mask=...,   # 可选
-            # tgt_key_padding_mask=...    # 可选
+            src_key_padding_mask=src_key_padding_mask,  # 屏蔽Encoder端PAD
         )
         out = out.permute(1, 0, 2)  # => (B, tgt_seq_len-1, d_model)
         out = self.dropout1(out)
@@ -128,7 +131,7 @@ if __name__ == "__main__":
     src_seq_len = 8  # 状态序列长度
     tgt_seq_len = 8  # move 序列长度
     input_dim = 55
-    num_moves = 18
+    num_moves = VOCAB_SIZE
 
     model = RubikSeq2SeqTransformer(input_dim=input_dim, num_moves=num_moves)
     src = torch.randn(B, src_seq_len, input_dim)  # 假设的魔方状态输入

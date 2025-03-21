@@ -18,7 +18,7 @@ IDX_TO_MOVE = {i: m for m, i in MOVE_TO_IDX.items()}
 PAD_TOKEN = 18
 SOS_TOKEN = 20
 EOS_TOKEN = 19
-MASK_TOKEN = 21
+MASK_OR_NOMOVE_TOKEN = 21
 
 VOCAB_SIZE = 22  # 0..17(动作) + 18(PAD) + 19(MASK) + 20(EOS) + 21(SOS)
 
@@ -47,7 +47,7 @@ def convert_state_to_tensor(state_6x9, color_to_id=None):
 def move_str_to_idx(move_str):
     """把动作字符串 (如 'R','R2','R'') -> 0..17 的整数标签"""
     if move_str not in MOVE_TO_IDX:
-        return PAD_TOKEN
+        return MASK_OR_NOMOVE_TOKEN
         # raise ValueError(f"未知动作: {move_str}")
     return MOVE_TO_IDX[move_str]
 

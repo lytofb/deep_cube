@@ -3,6 +3,7 @@ data:
   train_dir: "rubik_shards"
   val_dir: "rubik_val_shards"
   num_samples: 1000
+  max_history_len: 8
 train:
   batch_size: 256
   num_workers: 4
@@ -16,7 +17,7 @@ model:
   d_model: 256
   num_layers: 6
   nhead: 8
-  num_moves: 21
+  num_moves: 22
   max_seq_len: 50
   dropout: 0.2
 comet:
@@ -24,6 +25,6 @@ comet:
   project_name: "deepcube"
   workspace: "lytofb"
 inference:
-  model_path: "rubik_model.pth"
+  model_path: "rubik_model_best.pth"
   scramble_steps: 8
   max_len: 50

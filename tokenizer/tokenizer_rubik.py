@@ -1,4 +1,4 @@
-from utils import convert_state_to_tensor, PAD_TOKEN, move_str_to_idx, move_idx_to_str
+from utils import convert_state_to_tensor, MASK_OR_NOMOVE_TOKEN, move_str_to_idx, move_idx_to_str
 
 
 class RubikTokenizer:
@@ -13,7 +13,7 @@ class RubikTokenizer:
     def encode_move(self, mv):
         # 原先是 move_str_to_idx(mv)，也可加更多逻辑
         if mv is None:
-            return PAD_TOKEN
+            return MASK_OR_NOMOVE_TOKEN
         else:
             return move_str_to_idx(mv)
 

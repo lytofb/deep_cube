@@ -15,6 +15,7 @@ from utils import (
     MOVES_POOL,
     move_idx_to_str,
     PAD_TOKEN,
+    MASK_OR_NOMOVE_TOKEN,
     EOS_TOKEN,
     SOS_TOKEN
 )
@@ -62,7 +63,7 @@ def build_src_tensor_from_cube(cube):
     state_54 = tokenizer.encode_state(s6x9)  # (54,)
 
     # 末尾补一个占位 move（训练时第55维存 move 索引）
-    dummy_move = torch.tensor([PAD_TOKEN], dtype=torch.long)  # shape (1,)
+    dummy_move = torch.tensor([MASK_OR_NOMOVE_TOKEN], dtype=torch.long)  # shape (1,)
 
     combined_55 = torch.cat([state_54, dummy_move], dim=0)  # => (55,)
 

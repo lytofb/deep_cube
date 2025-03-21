@@ -26,7 +26,7 @@ from utils import (
     MOVES_POOL,
     MOVE_TO_IDX,
     PAD_TOKEN,
-    MASK_TOKEN,
+    MASK_OR_NOMOVE_TOKEN,
     EOS_TOKEN,
     SOS_TOKEN,
     VOCAB_SIZE,
