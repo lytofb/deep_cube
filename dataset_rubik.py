@@ -53,27 +53,37 @@ class RubikDataset(Dataset):
 
     def _generate_in_memory(self, num_samples, min_scramble, max_scramble):
         print(f"RubikSeqDataset: 正在内存中生成 {num_samples} 条数据...")
+        self.samples = []  # 先清空，以防重复追加
         for _ in range(num_samples):
             # 生成单条数据
             single_item = generate_single_case(min_scramble, max_scramble)
             steps = single_item['steps']
-            # 若总步数不足 history_len+1，则跳过
-            if len(steps) < self.history_len + 1:
+            # 如果 steps 为空，就无法生成任何样本，直接跳过
+            if len(steps) == 0:
                 continue
-            # 对每个解法序列，采用滑动窗口生成多个样本
-            for t in range(self.history_len, len(steps)):
-                # 构造 src：选取从 t-history_len 到 t（包含 t）的连续状态
+
+            # 针对每个 t，从 0 到 len(steps)-1 都生成一个样本
+            for t in range(len(steps)):
                 seq_len = self.history_len + 1
-                src_seq = torch.empty((seq_len, 55), dtype=torch.long)
-                for i, idx in enumerate(range(t - self.history_len, t + 1)):
-                    s6x9_i, mv_i = steps[idx]
-                    # 如果 mv_i 为 None，用 -1 表示特殊 token
+
+                # 先用 PAD_TOKEN 填充整个 src_seq
+                src_seq = torch.full((seq_len, 55),
+                                     PAD_TOKEN,
+                                     dtype=torch.long)
+
+                # 确定可用的真实 steps 范围：从 max(0, t-history_len) 到 t（含 t）
+                start_idx = max(0, t - self.history_len)
+                used_steps = steps[start_idx: t + 1]
+
+                # 用于将真实 steps 数据填到 src_seq 的右侧
+                offset = seq_len - len(used_steps)
+
+                for i, (s6x9_i, mv_i) in enumerate(used_steps):
                     mv_i_idx = self.tokenizer.encode_move(mv_i)
                     state_tensor = self.tokenizer.encode_state(s6x9_i)
-                    # 前54个位置为状态表示
-                    src_seq[i, :54] = state_tensor
-                    # 第55个位置记录该步的 move 索引（如果有的话）
-                    src_seq[i, 54] = mv_i_idx
+
+                    src_seq[offset + i, :54] = state_tensor
+                    src_seq[offset + i, 54] = mv_i_idx
 
                 # 构造 tgt：以 SOS 为起始符，后面跟从当前时刻 t 开始直到解法结束的 move 序列
                 tgt_list = [self.SOS_token]
@@ -109,23 +119,32 @@ class RubikDataset(Dataset):
                     break
                 for item in data_list:
                     steps = item['steps']
-                    # 若总步数不足 history_len+1，则跳过
-                    if len(steps) < self.history_len + 1:
+                    # 如果 steps 为空，就无法生成任何样本，直接跳过
+                    if len(steps) == 0:
                         continue
-                    # 对每个解法序列，采用滑动窗口生成多个样本
-                    for t in range(self.history_len, len(steps)):
-                        # 构造 src：选取从 t-history_len 到 t（包含 t）的连续状态
+
+                    # 针对每个 t，从 0 到 len(steps)-1 都生成一个样本
+                    for t in range(len(steps)):
                         seq_len = self.history_len + 1
-                        src_seq = torch.empty((seq_len, 55), dtype=torch.long)
-                        for i, idx in enumerate(range(t - self.history_len, t + 1)):
-                            s6x9_i, mv_i = steps[idx]
-                            # 如果 mv_i 为 None，用 -1 表示特殊 token
+
+                        # 先用 PAD_TOKEN 填充整个 src_seq
+                        src_seq = torch.full((seq_len, 55),
+                                             PAD_TOKEN,
+                                             dtype=torch.long)
+
+                        # 确定可用的真实 steps 范围：从 max(0, t-history_len) 到 t（含 t）
+                        start_idx = max(0, t - self.history_len)
+                        used_steps = steps[start_idx: t + 1]
+
+                        # 用于将真实 steps 数据填到 src_seq 的右侧
+                        offset = seq_len - len(used_steps)
+
+                        for i, (s6x9_i, mv_i) in enumerate(used_steps):
                             mv_i_idx = self.tokenizer.encode_move(mv_i)
                             state_tensor = self.tokenizer.encode_state(s6x9_i)
-                            # 前54个位置为状态表示
-                            src_seq[i, :54] = state_tensor
-                            # 第55个位置记录该步的 move 索引（如果有的话）
-                            src_seq[i, 54] = mv_i_idx
+
+                            src_seq[offset + i, :54] = state_tensor
+                            src_seq[offset + i, 54] = mv_i_idx
 
                         # 构造 tgt：以 SOS 为起始符，后面跟从当前时刻 t 开始直到解法结束的 move 序列
                         tgt_list = [self.SOS_token]

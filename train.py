@@ -30,6 +30,7 @@ from omegaconf import OmegaConf
 config = OmegaConf.load("config.yaml")
 
 scaler = GradScaler()
+use_amp = config.train.get("use_amp", True)
 
 def init_weights(m):
     if isinstance(m, nn.Linear):
@@ -53,7 +54,7 @@ def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device):
         target_output = tgt[:, 1:]   # (B, tgt_seq_len - 1)
 
         # 使用混合后的输入进行前向传播，计算最终 loss
-        with autocast():
+        with autocast(enabled=use_amp):
             logits = model(src, decoder_input)  # (B, seq_len-1, num_moves)
             loss = criterion(logits.view(-1, logits.size(-1)), target_output.contiguous().view(-1))
 
@@ -107,7 +108,7 @@ def train_one_epoch_seq2seq_mix(model, dataloader, optimizer, criterion, device,
         mixed_decoder_input = torch.where(mix_mask, teacher_preds, decoder_input)
 
         # 使用混合后的输入进行前向传播，计算最终 loss
-        with autocast():
+        with autocast(enabled=use_amp):
             logits = model(src, mixed_decoder_input)  # (B, seq_len-1, num_moves)
             loss = criterion(logits.view(-1, logits.size(-1)), target_tokens.contiguous().view(-1))
 
@@ -240,7 +241,7 @@ def main():
         train_dataset,
         batch_size=config.train.batch_size,
         shuffle=True,
-        collate_fn=my_collate_fn_random_trunc,
+        collate_fn=collate_fn,
         num_workers=config.train.num_workers,
         pin_memory=True,
         persistent_workers=True,
@@ -374,7 +375,7 @@ def main_ddp():
         batch_size=config.train.batch_size,
         shuffle=False,  # 注意，这里需要 False，分布式时用 sampler 控制 shuffle
         sampler=train_sampler,
-        collate_fn=my_collate_fn_random_trunc,
+        collate_fn=collate_fn,
         num_workers=config.train.num_workers,
         pin_memory=True,
         persistent_workers=True,
