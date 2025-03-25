@@ -9,7 +9,9 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import random
-from utils import PAD_TOKEN
+from utils import PAD_TOKEN,EOS_TOKEN,SOS_TOKEN
+
+from inference import iterative_greedy_decode_seq2seq ,random_scramble_cube
 
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -113,6 +115,8 @@ def train_one_epoch_seq2seq_mix(model, dataloader, optimizer, criterion, device,
             loss = criterion(logits.view(-1, logits.size(-1)), target_tokens.contiguous().view(-1))
 
         scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         scaler.step(optimizer)
         scaler.update()
 
@@ -427,7 +431,7 @@ def main_ddp():
         # 分布式训练时，每个 epoch 都要在 sampler 上设置一下随机种子
         train_sampler.set_epoch(epoch)
 
-        avg_loss = train_one_epoch_seq2seq(model, train_loader, optimizer, criterion, device)
+        avg_loss = train_one_epoch_seq2seq_mix(model, train_loader, optimizer, criterion, device)
         scheduler.step()
         current_lr = scheduler.get_last_lr()[0]
 
@@ -436,7 +440,30 @@ def main_ddp():
             print(f"Epoch {epoch}, Loss={avg_loss:.4f}, LR={current_lr:.6f}")
             val_acc = evaluate_seq2seq_accuracy(model, val_loader, device)
             print(f"[Validation] Epoch {epoch}, Val_Acc={val_acc:.4f}")
-            # ... 这里也可以做一些 if epoch % 50 == 0: 保存模型 的操作 ...
+            # 请在 "if epoch % 10 == 0:" 的 pass 替换为以下内容
+
+            if epoch % 10 == 0:
+                print(f"===== Free Run Evaluate at Epoch {epoch} =====")
+                model.eval()
+                with torch.no_grad():
+                    # 演示: 随机打乱一个魔方，调用 iterative_greedy_decode_seq2seq 来做推理
+                    cube, scramble_moves = random_scramble_cube(steps=8)  # 你也可改为固定打乱
+                    print("Scramble moves:", scramble_moves)
+
+                    # 进行自由推断
+                    pred_tokens = iterative_greedy_decode_seq2seq(
+                        model=model,
+                        cube=cube,
+                        history_len=config.data.max_history_len,  # 例如8，与训练时一致
+                        max_len=50,
+                        device=device
+                    )
+
+                    print("Predicted token IDs:", pred_tokens)
+
+                model.train()
+
+                # 请在这里帮我实现一下free run evaluate，并打印出预测的token都是什么
             # 每 50 个 epoch 做一次验证
             if epoch % 50 == 0:
 

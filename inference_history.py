@@ -65,6 +65,7 @@ def evaluate_seq2seq_accuracy(model, dataloader, device):
 
     total_correct = 0
     total_count = 0
+    printed_samples = 0  # 用于记录已打印的样本数量
 
     for src, tgt in dataloader:
         src = src.to(device)
@@ -78,13 +79,27 @@ def evaluate_seq2seq_accuracy(model, dataloader, device):
         # 取 argmax => (B, seq_len-1)
         pred_tokens = logits.argmax(dim=-1)
 
-        # 假设每个样本的 src 长度相同，计算需要评估的起始位置
-        # 例如：如果 tgt 长度为9，则 teacher forcing 序列长度为8；
-        # 若 src 长度为4，则 src 中已包含前3个 step，所以从索引 3 开始计算预测部分
+        # 根据 src 长度确定从哪一步开始评估
+        # 例如：若 tgt 长度为 9，src 长度为 4，则 teacher forcing 长度为 8，
+        # 而 src 中已经包含前 3 个 step，所以从索引 3 开始评估 (8-3=5 个 token)
         eval_start_index = src.size(1) - 1
 
         pred_tokens_eval = pred_tokens[:, eval_start_index:]
         target_output_eval = target_output[:, eval_start_index:]
+
+        # 打印当前 batch 中前 5 个样本（整个 dataloader 中只打印前 5 个样本）
+        batch_size = src.size(0)
+        for i in range(batch_size):
+            if printed_samples < 3:
+                print(f"Sample {printed_samples}:")
+                print("  src.o:                ", src[i].cpu().tolist())
+                print("  src:                ", src[i].cpu()[:,-1])
+                print("  tgt:                ", tgt[i].cpu().tolist())
+                print("  pred_tokens_eval:   ", pred_tokens_eval[i].cpu().tolist())
+                print("  target_output_eval: ", target_output_eval[i].cpu().tolist())
+                printed_samples += 1
+            else:
+                break
 
         total_correct += (pred_tokens_eval == target_output_eval).sum().item()
         total_count += target_output_eval.numel()
