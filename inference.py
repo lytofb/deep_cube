@@ -189,7 +189,7 @@ def iterative_greedy_decode_seq2seq(model, cube, history_len=8, max_len=50, devi
         # 5. 将该动作应用到魔方
         next_move_str = tokenizer.decode_move(next_token_id)
         cube(next_move_str)  # 执行动作
-        predicted_moves.append(next_move_str)
+        predicted_moves.append(next_token_id)
 
         # 6. 检查是否复原
         if is_solved(cube):
