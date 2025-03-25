@@ -145,7 +145,6 @@ def main():
         new_key = k.replace("module.", "")
         new_state_dict[new_key] = v
     model.load_state_dict(new_state_dict)
-    model.load_state_dict(torch.load("rubik_model.pth", map_location=device))
     model.to(device)
     model.eval()
 
