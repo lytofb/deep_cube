@@ -43,6 +43,22 @@ def convert_state_to_tensor(state_6x9, color_to_id=None):
     # flat 长度是 6*9=54
     return torch.tensor(flat, dtype=torch.long)
 
+def cube_to_6x9(cube):
+    """
+    将当前魔方 cube 序列化成 6x9 的二维数组, 去掉 '[ ]'。
+    """
+    face_order = ['U', 'L', 'F', 'R', 'B', 'D']
+    res = []
+    for face in face_order:
+        face_obj = cube.get_face(face)
+        row_data = []
+        for r in range(3):
+            for c in range(3):
+                raw_sticker = str(face_obj[r][c])  # e.g. "[g]"
+                color_char = raw_sticker.strip('[]')
+                row_data.append(color_char)
+        res.append(row_data)
+    return res
 
 def move_str_to_idx(move_str):
     """把动作字符串 (如 'R','R2','R'') -> 0..17 的整数标签"""

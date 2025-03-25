@@ -11,6 +11,7 @@ from models.model_history_transformer import RubikSeq2SeqTransformer
 from tokenizer.tokenizer_rubik import RubikTokenizer
 
 from utils import (
+    cube_to_6x9,
     convert_state_to_tensor,  # 需兼容6x9输入 => (54,)
     MOVES_POOL,
     move_idx_to_str,
@@ -42,34 +43,30 @@ def random_scramble_cube(steps=20):
         c(mv)
     return c, moves
 
-def build_src_tensor_from_cube(cube):
+def build_src_tensor_from_cube(cube, history_len=8):
     """
-    构造模型需要的 src: (1, 1, 55)
-    - 前 54 维是魔方当前状态
-    - 最后 1 维放一个占位 move，比如 PAD_TOKEN
+    将推断时的初始状态，构造成与训练时相同的格式：
+      - 形状: (1, history_len+1, 55)
+      - 若 t=0，则代表「前 history_len 条状态」都无效，使用 PAD_TOKEN 填充
+      - 最后一条 (index=-1) 填入当前实际状态的 54 维 + move 索引 (无真实 move 则用 -1)
     """
-    # 按你训练时的方式获取 (6x9) 的颜色字符数组
-    s6x9 = []
-    for face_name in ['U', 'L', 'F', 'R', 'B', 'D']:
-        face_obj = cube.get_face(face_name)
-        row_data = []
-        for r in range(3):
-            for c in range(3):
-                color_char = str(face_obj[r][c]).strip('[]').lower()
-                row_data.append(color_char)
-        s6x9.append(row_data)
+    # 1. 准备一个 (history_len+1, 55) 的张量，并全部用 PAD_TOKEN 填充
+    seq_len = history_len + 1
+    src_seq = torch.full((seq_len, 55), PAD_TOKEN, dtype=torch.long)
 
-    # 转成 (54,) 的张量
+    # 2. 获取魔方当前状态的 54 维张量
+    #    与训练时保持一致: (6x9) => (54,)
+    s6x9 = cube_to_6x9(cube)
     state_54 = tokenizer.encode_state(s6x9)  # (54,)
 
-    # 末尾补一个占位 move（训练时第55维存 move 索引）
+    # 3. 在最后一行填入「当前状态 + move 索引MASK_OR_NOMOVE_TOKEN」
+    src_seq[-1, :54] = state_54
     dummy_move = torch.tensor([MASK_OR_NOMOVE_TOKEN], dtype=torch.long)  # shape (1,)
+    src_seq[-1, 54] = dummy_move
 
-    combined_55 = torch.cat([state_54, dummy_move], dim=0)  # => (55,)
+    # 4. 扩展一个 batch 维度 => (1, history_len+1, 55)
+    return src_seq.unsqueeze(0)
 
-    # 加上 batch=1, seq_len=1 => (1,1,55)
-    combined_55 = combined_55.unsqueeze(0).unsqueeze(0)
-    return combined_55  # (1,1,55)
 
 @torch.no_grad()
 def beam_search(model, src, beam_size=3, max_steps=50):
@@ -154,6 +151,85 @@ def beam_search(model, src, beam_size=3, max_steps=50):
     return best_candidate["tokens"]
 
 @torch.no_grad()
+def iterative_greedy_decode_seq2seq(model, cube, history_len=8, max_len=50):
+    """
+    一个示例：使用与训练时类似的“滑动窗口”逻辑做贪心解码推理。
+    - 每步都更新 src，让 src 包含最近 history_len 步 (含当前步) 的 [状态 + 动作]
+    - 仅预测“下一个动作”，然后更新魔方状态，再继续。
+    """
+
+    model.eval()
+
+    # 用于记录已经执行的 (state, move) 序列，最初时没有 move，因此 move=None 或 -1
+    # 这里 steps 的结构与训练时相同: [(s6x9_0, mv_0), (s6x9_1, mv_1), ...]
+    steps = []
+    # 先把初始状态放进 steps，move=None
+    init_state_6x9 = cube_to_6x9(cube)  # 你要自行实现
+    steps.append((init_state_6x9, None))
+
+    predicted_moves = []
+    for t in range(max_len):
+        # 1. 根据 steps 的“最后 history_len 步”构建 (1, history_len+1, 55) 的 src
+        src = build_src_tensor_from_steps(steps, history_len=history_len)  # 形如 (1, hist_len+1, 55)
+
+        # 2. Decoder 端输入: [SOS_TOKEN], shape = (1,1)
+        decoder_input = torch.tensor([[SOS_TOKEN]], dtype=torch.long, device=src.device)
+
+        # 3. 前向，拿到 logits => (1, 1, num_moves)
+        logits = model(src, decoder_input)  # (batch=1, seq_len=1, num_moves=?)
+        last_step_logits = logits[:, -1, :]  # => shape: (1, num_moves)
+
+        # 4. 取 argmax 作为下一个动作
+        next_token_id = torch.argmax(last_step_logits, dim=1).item()
+        if next_token_id == EOS_TOKEN or next_token_id == PAD_TOKEN:
+            print("模型预测到EOS/PAD，推理结束.")
+            break
+
+        # 5. 将该动作应用到魔方
+        next_move_str = tokenizer.decode_move(next_token_id)
+        cube(next_move_str)  # 执行动作
+        predicted_moves.append(next_move_str)
+
+        # 6. 检查是否复原
+        if is_solved(cube):
+            print(f"在第 {t+1} 步成功复原!")
+            break
+
+        # 7. 更新 steps: 新的状态 + 动作
+        new_state_6x9 = cube_to_6x9(cube)
+        steps.append((new_state_6x9, next_move_str))
+
+    return predicted_moves
+
+def build_src_tensor_from_steps(steps, history_len=8):
+    # steps 的长度
+    total_len = len(steps)
+
+    # 先用 PAD_TOKEN 填充 (history_len+1, 55)
+    src_seq = torch.full(
+        (history_len + 1, 55),
+        PAD_TOKEN,
+        dtype=torch.long
+    )
+
+    # 找到本次要用的窗口: 从 max(0, total_len - (history_len+1)) 到 total_len
+    start_idx = max(0, total_len - (history_len + 1))
+    used_steps = steps[start_idx : total_len]
+
+    # 用于将真实 steps 数据对齐到 src_seq 最右侧
+    offset = (history_len + 1) - len(used_steps)
+
+    for i, (s6x9_i, mv_i) in enumerate(used_steps):
+        state_tensor = tokenizer.encode_state(s6x9_i)  # => (54,)
+        src_seq[offset + i, :54] = state_tensor
+        mv_idx = tokenizer.encode_move(mv_i)
+        src_seq[offset + i, 54] = mv_idx
+
+    # 扩展出 batch 维度 => (1, history_len+1, 55)
+    return src_seq.unsqueeze(0)
+
+
+@torch.no_grad()
 def greedy_decode_seq2seq(model, src, max_len=50):
     """
     对单条样本(batch=1)使用贪心解码产生动作序列（不含 SOS/EOS）。
@@ -219,10 +295,10 @@ def main():
     print(f"Scramble moves: {scramble_moves}")
 
     # 3. 构造 src
-    src_tensor = build_src_tensor_from_cube(cube).to(device)
+    src_tensor = build_src_tensor_from_cube(cube,config.inference.max_len).to(device)
     # 4. 用 seq2seq 进行贪心解码，生成还原动作序列
-    # pred_tokens = greedy_decode_seq2seq(model, src_tensor, max_len=config.inference.max_len)
-    pred_tokens = beam_search(model, src_tensor, max_len=config.inference.max_len)
+    pred_tokens = iterative_greedy_decode_seq2seq(model, src_tensor, max_len=config.inference.max_len)
+    # pred_tokens = beam_search(model, src_tensor, max_len=config.inference.max_len)
     print(f"Predicted tokens: {pred_tokens}")
     # 转成字符串动作
     pred_moves = []
