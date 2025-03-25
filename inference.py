@@ -151,7 +151,7 @@ def beam_search(model, src, beam_size=3, max_steps=50):
     return best_candidate["tokens"]
 
 @torch.no_grad()
-def iterative_greedy_decode_seq2seq(model, cube, history_len=8, max_len=50):
+def iterative_greedy_decode_seq2seq(model, cube, history_len=8, max_len=50, device = "cuda"):
     """
     一个示例：使用与训练时类似的“滑动窗口”逻辑做贪心解码推理。
     - 每步都更新 src，让 src 包含最近 history_len 步 (含当前步) 的 [状态 + 动作]
@@ -171,9 +171,10 @@ def iterative_greedy_decode_seq2seq(model, cube, history_len=8, max_len=50):
     for t in range(max_len):
         # 1. 根据 steps 的“最后 history_len 步”构建 (1, history_len+1, 55) 的 src
         src = build_src_tensor_from_steps(steps, history_len=history_len)  # 形如 (1, hist_len+1, 55)
+        src = src.to(device)
 
         # 2. Decoder 端输入: [SOS_TOKEN], shape = (1,1)
-        decoder_input = torch.tensor([[SOS_TOKEN]], dtype=torch.long, device=src.device)
+        decoder_input = torch.tensor([[SOS_TOKEN]], dtype=torch.long, device=device)
 
         # 3. 前向，拿到 logits => (1, 1, num_moves)
         logits = model(src, decoder_input)  # (batch=1, seq_len=1, num_moves=?)
@@ -295,9 +296,9 @@ def main():
     print(f"Scramble moves: {scramble_moves}")
 
     # 3. 构造 src
-    src_tensor = build_src_tensor_from_cube(cube,config.inference.max_len).to(device)
+    # src_tensor = build_src_tensor_from_cube(cube,config.inference.max_len).to(device)
     # 4. 用 seq2seq 进行贪心解码，生成还原动作序列
-    pred_tokens = iterative_greedy_decode_seq2seq(model, src_tensor, max_len=config.inference.max_len)
+    pred_tokens = iterative_greedy_decode_seq2seq(model, cube, max_len=config.inference.max_len,device=device)
     # pred_tokens = beam_search(model, src_tensor, max_len=config.inference.max_len)
     print(f"Predicted tokens: {pred_tokens}")
     # 转成字符串动作
