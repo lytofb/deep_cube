@@ -69,26 +69,79 @@ def build_src_tensor_from_cube(cube, history_len=8):
 
 
 @torch.no_grad()
-def beam_search(model, src, beam_size=3, max_steps=50):
+def beam_search(model, cube, history_len=8, max_len=50, beam_size=3, device="cuda"):
     """
-    对单条样本(batch=1)使用 Beam Search 产生动作序列（不含 SOS/EOS）。
+    使用 Beam Search（替代贪心）迭代预测动作序列，直到魔方复原或达到最大步数。
+
+    与 iterative_greedy_decode_seq2seq 类似：
+      - 每步根据最近 history_len 步的状态更新输入 src
+      - 利用模型预测下一个动作（这里采用 Beam Search 而非单步 argmax）
+      - 将预测动作应用到 cube 上，并更新状态
+      - 如果预测到 EOS/PAD 或魔方复原，则提前结束
 
     参数:
       model: seq2seq 模型
-      src: 输入 tensor，形状 (1, src_seq_len, feature_dim)
-      beam_size: 每步扩展的候选数量
-      max_steps: 最大解码步数
+      cube: 魔方对象（必须支持 cube_to_6x9、cube(move_str) 和 is_solved 等接口）
+      history_len: 用于构造 src 的历史步数
+      max_len: 最大预测步数
+      beam_size: Beam Search 每步扩展的候选数量
+      device: 设备
 
     返回:
       List[int]，预测出的 move token 序列
     """
-    device = src.device
     model.eval()
 
-    # 初始 decoder 输入: [SOS_TOKEN]，注意这里不把 SOS_TOKEN 放入最终预测序列
-    initial_decoder = torch.tensor([[SOS_TOKEN]], dtype=torch.long, device=device)
+    # 初始化记录：steps 中存放 (state, move) 序列，初始状态不含动作
+    steps = []
+    init_state_6x9 = cube_to_6x9(cube)  # 用户需自行实现：将 cube 转为 6x9 表示
+    steps.append((init_state_6x9, None))
 
-    # 每个候选分支记录：decoder_input、累计对数概率、以及已生成 token 序列（不含 SOS）
+    predicted_moves = []
+
+    for t in range(max_len):
+        # 根据最近 history_len 步构建 src，形状为 (1, history_len+1, feature_dim)
+        src = build_src_tensor_from_steps(steps, history_len=history_len)
+        src = src.to(device)
+
+        # 使用 Beam Search 预测下一个动作：
+        # 这里我们只展开一步（max_steps=1），因此返回的 tokens 序列应仅含一个 token
+        next_tokens = _beam_search_step(model, src, beam_size=beam_size, max_steps=1, device=device)
+        if not next_tokens:
+            break
+        next_token_id = next_tokens[0]
+
+        # 若预测到 EOS 或 PAD，则结束推理
+        if next_token_id == EOS_TOKEN or next_token_id == PAD_TOKEN:
+            print("模型预测到EOS/PAD，推理结束.")
+            break
+
+        # 将 token 转为动作字符串，并应用到魔方上
+        next_move_str = tokenizer.decode_move(next_token_id)
+        cube(next_move_str)  # 应用动作
+        predicted_moves.append(next_token_id)
+
+        # 检查是否已复原
+        if is_solved(cube):
+            print(f"在第 {t + 1} 步成功复原!")
+            break
+
+        # 更新步骤记录：记录最新状态及刚执行的动作
+        new_state_6x9 = cube_to_6x9(cube)
+        steps.append((new_state_6x9, next_move_str))
+
+    return predicted_moves
+
+
+@torch.no_grad()
+def _beam_search_step(model, src, beam_size=3, max_steps=1, device="cuda"):
+    """
+    基于给定 src 使用 Beam Search 解码，返回最佳候选的 tokens 序列。
+    与原始 beam_search 实现一致，只是这里 max_steps 参数通常设置为1（即仅预测下一个动作）。
+    """
+    # 初始 decoder 输入为 [SOS_TOKEN]（不作为最终输出）
+    initial_decoder = torch.tensor([[SOS_TOKEN]], dtype=torch.long, device=device)
+    # 每个候选分支记录 decoder_input、累计对数概率以及已生成的 token 序列（不含 SOS）
     beam = [{
         "decoder_input": initial_decoder,
         "score": 0.0,
@@ -99,10 +152,10 @@ def beam_search(model, src, beam_size=3, max_steps=50):
     for _ in range(max_steps):
         new_beam = []
         for candidate in beam:
-            decoder_input = candidate["decoder_input"]  # shape: (1, current_seq_len)
-            # 模型前向，输出 logits, 形状: (1, seq_len, num_moves)
+            decoder_input = candidate["decoder_input"]  # 形状: (1, current_seq_len)
+            # 前向传播，输出 logits，形状: (1, seq_len, num_moves)
             logits = model(src, decoder_input)
-            # 取最后时刻的 logits，形状: (1, num_moves)
+            # 取最后一步的 logits，形状: (1, num_moves)
             last_logits = logits[:, -1, :]
             # 计算 softmax 概率
             probs = F.softmax(last_logits, dim=-1)
@@ -111,7 +164,7 @@ def beam_search(model, src, beam_size=3, max_steps=50):
             topk_probs = topk_probs.squeeze(0)  # (beam_size,)
             topk_indices = topk_indices.squeeze(0)  # (beam_size,)
 
-            # 对于每个候选动作，扩展新的候选分支
+            # 扩展每个候选分支
             for prob, token in zip(topk_probs, topk_indices):
                 token_id = token.item()
                 new_score = candidate["score"] + torch.log(prob).item()
@@ -120,8 +173,7 @@ def beam_search(model, src, beam_size=3, max_steps=50):
                 new_decoder_input = torch.cat(
                     [decoder_input, token.unsqueeze(0).unsqueeze(0)], dim=1
                 )
-
-                # 如果生成 EOS 或 PAD，则认为该候选结束，将其存入 finished_candidates
+                # 如果生成 EOS 或 PAD，则将该候选视为结束
                 if token_id == EOS_TOKEN or token_id == PAD_TOKEN:
                     finished_candidates.append({
                         "decoder_input": new_decoder_input,
@@ -134,21 +186,20 @@ def beam_search(model, src, beam_size=3, max_steps=50):
                         "score": new_score,
                         "tokens": new_tokens
                     })
-
-        # 若没有新的候选分支，则退出循环
+        # 如果没有扩展出新的候选，则退出循环
         if not new_beam:
             break
-
-        # 从扩展的候选中选择得分最高的 beam_size 个
+        # 选择得分最高的 beam_size 个候选继续扩展
         beam = sorted(new_beam, key=lambda x: x["score"], reverse=True)[:beam_size]
 
-    # 如果有结束候选，返回得分最高的，否则返回当前 beam 中得分最高的候选
+    # 如果存在已完成候选，则返回得分最高的；否则返回当前 beam 中得分最高的候选
     if finished_candidates:
         best_candidate = sorted(finished_candidates, key=lambda x: x["score"], reverse=True)[0]
     else:
         best_candidate = sorted(beam, key=lambda x: x["score"], reverse=True)[0]
 
     return best_candidate["tokens"]
+
 
 @torch.no_grad()
 def iterative_greedy_decode_seq2seq(model, cube, history_len=8, max_len=50, device = "cuda"):

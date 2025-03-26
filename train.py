@@ -11,7 +11,7 @@ from tqdm import tqdm
 import random
 from utils import PAD_TOKEN,EOS_TOKEN,SOS_TOKEN
 
-from inference import iterative_greedy_decode_seq2seq ,random_scramble_cube
+from inference import iterative_greedy_decode_seq2seq, random_scramble_cube, beam_search
 
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -431,7 +431,7 @@ def main_ddp():
         # 分布式训练时，每个 epoch 都要在 sampler 上设置一下随机种子
         train_sampler.set_epoch(epoch)
 
-        avg_loss = train_one_epoch_seq2seq_mix(model, train_loader, optimizer, criterion, device)
+        avg_loss = train_one_epoch_seq2seq_mix(model, train_loader, optimizer, criterion, device, epoch, epochs)
         scheduler.step()
         current_lr = scheduler.get_last_lr()[0]
 
@@ -451,7 +451,7 @@ def main_ddp():
                     print("Scramble moves:", scramble_moves)
 
                     # 进行自由推断
-                    pred_tokens = iterative_greedy_decode_seq2seq(
+                    pred_tokens = beam_search(
                         model=model,
                         cube=cube,
                         history_len=config.data.max_history_len,  # 例如8，与训练时一致
