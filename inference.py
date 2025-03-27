@@ -202,7 +202,7 @@ def _beam_search_step(model, src, beam_size=3, max_steps=1, device="cuda"):
 
 
 @torch.no_grad()
-def iterative_greedy_decode_seq2seq(model, cube, history_len=8, max_len=50, device="cuda", repetition_penalty=1.5):
+def iterative_greedy_decode_seq2seq(model, cube, history_len=8, max_len=50, device="cuda"):
     """
     一个示例：使用与训练时类似的“滑动窗口”逻辑做贪心解码推理，并添加重复惩罚，避免连续生成相同的动作。
     - 每步都更新 src，让 src 包含最近 history_len 步 (含当前步) 的 [状态 + 动作]

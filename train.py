@@ -104,10 +104,16 @@ def train_one_epoch_seq2seq_mix(model, dataloader, optimizer, criterion, device,
             teacher_logits = model(src, decoder_input)
             teacher_preds = teacher_logits.argmax(dim=-1)  # (B, seq_len-1)
 
+        # 假设 teacher_preds 和 decoder_input 的 shape 都是 (B, tgt_seq_len - 1)
+        # 在 teacher_preds 前面加一个 dummy（这里用 PAD_TOKEN 表示，你也可以用其他合适的值）
+        dummy = torch.full((teacher_preds.size(0), 1), PAD_TOKEN, dtype=teacher_preds.dtype,
+                           device=teacher_preds.device)
+        # 拼接 dummy 并去掉 teacher_preds 的最后一个 token，得到新的 teacher_preds_mod，其 shape 为 (B, tgt_seq_len - 1)
+        teacher_preds_mod = torch.cat([dummy, teacher_preds[:, :-1]], dim=1)
         # 对 decoder 输入的每个 token（除第一个 token 外）随机决定是否替换为模型预测
         mix_mask = (torch.rand(decoder_input.shape, device=device) < sampling_prob)
         mix_mask[:, 0] = False  # 保持 SOS token 不变
-        mixed_decoder_input = torch.where(mix_mask, teacher_preds, decoder_input)
+        mixed_decoder_input = torch.where(mix_mask, teacher_preds_mod, decoder_input)
 
         # 使用混合后的输入进行前向传播，计算最终 loss
         with autocast(enabled=use_amp):
