@@ -202,17 +202,16 @@ def _beam_search_step(model, src, beam_size=3, max_steps=1, device="cuda"):
 
 
 @torch.no_grad()
-def iterative_greedy_decode_seq2seq(model, cube, history_len=8, max_len=50, device = "cuda"):
+def iterative_greedy_decode_seq2seq(model, cube, history_len=8, max_len=50, device="cuda", repetition_penalty=1.5):
     """
-    一个示例：使用与训练时类似的“滑动窗口”逻辑做贪心解码推理。
+    一个示例：使用与训练时类似的“滑动窗口”逻辑做贪心解码推理，并添加重复惩罚，避免连续生成相同的动作。
     - 每步都更新 src，让 src 包含最近 history_len 步 (含当前步) 的 [状态 + 动作]
     - 仅预测“下一个动作”，然后更新魔方状态，再继续。
     """
 
     model.eval()
 
-    # 用于记录已经执行的 (state, move) 序列，最初时没有 move，因此 move=None 或 -1
-    # 这里 steps 的结构与训练时相同: [(s6x9_0, mv_0), (s6x9_1, mv_1), ...]
+    # 用于记录已经执行的 (state, move) 序列，最初时没有 move，因此 move=None
     steps = []
     # 先把初始状态放进 steps，move=None
     init_state_6x9 = cube_to_6x9(cube)  # 你要自行实现
@@ -227,31 +226,37 @@ def iterative_greedy_decode_seq2seq(model, cube, history_len=8, max_len=50, devi
         # 2. Decoder 端输入: [SOS_TOKEN], shape = (1,1)
         decoder_input = torch.tensor([[SOS_TOKEN]], dtype=torch.long, device=device)
 
-        # 3. 前向，拿到 logits => (1, 1, num_moves)
+        # 3. 前向推理，拿到 logits => (1, 1, num_moves)
         logits = model(src, decoder_input)  # (batch=1, seq_len=1, num_moves=?)
-        last_step_logits = logits[:, -1, :]  # => shape: (1, num_moves)
+        last_step_logits = logits[:, -1, :]  # shape: (1, num_moves)
 
-        # 4. 取 argmax 作为下一个动作
+        # 4. 添加重复惩罚：对上一步预测的 token 进行惩罚，降低其 logit 值
+        if predicted_moves:
+            prev_token = predicted_moves[-1]
+            last_step_logits[0, prev_token] = -float('inf')
+
+        # 5. 取 argmax 作为下一个动作
         next_token_id = torch.argmax(last_step_logits, dim=1).item()
         if next_token_id == EOS_TOKEN or next_token_id == PAD_TOKEN:
             print("模型预测到EOS/PAD，推理结束.")
             break
 
-        # 5. 将该动作应用到魔方
+        # 6. 将该动作应用到魔方
         next_move_str = tokenizer.decode_move(next_token_id)
         cube(next_move_str)  # 执行动作
         predicted_moves.append(next_token_id)
 
-        # 6. 检查是否复原
+        # 7. 检查是否复原
         if is_solved(cube):
             print(f"在第 {t+1} 步成功复原!")
             break
 
-        # 7. 更新 steps: 新的状态 + 动作
+        # 8. 更新 steps: 新的状态 + 动作
         new_state_6x9 = cube_to_6x9(cube)
         steps.append((new_state_6x9, next_move_str))
 
     return predicted_moves
+
 
 def build_src_tensor_from_steps(steps, history_len=8):
     # steps 的长度

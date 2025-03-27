@@ -87,7 +87,7 @@ def train_one_epoch_seq2seq_mix(model, dataloader, optimizer, criterion, device,
     total_loss = 0.0
 
     # 设置 scheduled sampling 的概率（例如：前期主要用 teacher forcing，后期逐渐使用更多模型预测）
-    sampling_prob = min(0.5, epoch / total_epochs * 0.5)
+    sampling_prob = min(0.5, epoch / total_epochs * 0.5 + 0.3)
 
     for src, tgt in tqdm(dataloader, desc=f"Training (epoch={epoch})"):
         src = src.to(device, non_blocking=True)
@@ -442,7 +442,7 @@ def main_ddp():
             print(f"[Validation] Epoch {epoch}, Val_Acc={val_acc:.4f}")
             # 请在 "if epoch % 10 == 0:" 的 pass 替换为以下内容
 
-            if epoch % 10 == 0:
+            if epoch % 2 == 0:
                 print(f"===== Free Run Evaluate at Epoch {epoch} =====")
                 model.eval()
                 with torch.no_grad():
