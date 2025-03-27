@@ -69,7 +69,7 @@ def build_src_tensor_from_cube(cube, history_len=8):
 
 
 @torch.no_grad()
-def beam_search(model, cube, history_len=8, max_len=50, beam_size=3, device="cuda"):
+def beam_search(model, cube, history_len=8, max_len=50, beam_size=16, device="cuda"):
     """
     使用 Beam Search（替代贪心）迭代预测动作序列，直到魔方复原或达到最大步数。
 

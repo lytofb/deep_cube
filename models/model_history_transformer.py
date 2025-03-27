@@ -90,6 +90,7 @@ class RubikSeq2SeqTransformer(nn.Module):
         # 否则要根据你的实际数据格式改写
         src_tokens = src[..., -1].long()           # (B, src_seq_len)
         src_key_padding_mask = (src_tokens == PAD_TOKEN)  # True 表示 padding，需要屏蔽
+        tgt_key_padding_mask = (tgt_input == PAD_TOKEN)
 
         # ------- Encoder 部分保持不变 -------
         src = src.permute(1, 0, 2).float()  # => (src_seq_len, B, d_model)
@@ -118,6 +119,8 @@ class RubikSeq2SeqTransformer(nn.Module):
             tgt=tgt_emb,
             tgt_mask=tgt_mask,
             src_key_padding_mask=src_key_padding_mask,  # 屏蔽Encoder端PAD
+            tgt_key_padding_mask=tgt_key_padding_mask,
+            tgt_is_causal=True
         )
         out = out.permute(1, 0, 2)  # => (B, tgt_seq_len-1, d_model)
         out = self.dropout1(out)
