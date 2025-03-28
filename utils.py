@@ -1,5 +1,6 @@
 # utils.py
 import torch
+import pycuber as pc
 
 # 常见颜色，如果需要可以加更多
 COLOR_CHARS = ['w', 'g', 'r', 'b', 'o', 'y']
@@ -71,3 +72,54 @@ def move_str_to_idx(move_str):
 def move_idx_to_str(move_idx):
     """把 0..17 -> 'R','R2','R'','U'..."""
     return IDX_TO_MOVE[move_idx]
+
+def convert_tensor_to_state_6x9(tensor_54, id_to_color=None):
+    """
+    将形如 (54,) 的 LongTensor 转回 6×9 的颜色字符矩阵。
+
+    Args:
+        tensor_54: 形如 (54,) 的张量，每个元素是 0..5 等等，对应某种颜色
+        id_to_color: dict, 比如 {0:'W', 1:'G', 2:'R', 3:'B', 4:'O', 5:'Y'} 等
+
+    Returns:
+        state_6x9: list[list[str]]，共 6 行，每行 9 个颜色字符
+                   例如 row0 = [ 'W','W','W','W','W','W','W','W','W' ] 表示 Up 面
+    """
+    if id_to_color is None:
+        id_to_color = {i: c for i, c in enumerate(COLOR_CHARS)}
+    tensor_54 = tensor_54.view(-1)  # 确保是一维
+    assert tensor_54.size(0) == 54, "输入张量必须长度为 54"
+
+    state_6x9 = []
+    idx = 0
+    for face_idx in range(6):
+        row_colors = []
+        for _ in range(9):
+            color_id = tensor_54[idx].item()
+            color_char = id_to_color[color_id]
+            row_colors.append(color_char)
+            idx += 1
+        state_6x9.append(row_colors)
+    return state_6x9
+
+
+def create_cube_from_6x9(state_6x9):
+    """
+    根据 6×9 颜色字符布局，构造一个 pycuber.Cube 实例。
+
+    假设 6×9 的行顺序分别对应 (U, R, F, D, L, B) 六个面，
+    且每行的 9 个字符按 row-major(3×3) 顺序排列。
+    """
+    cube = pc.Cube()
+    # PyCuber 里可通过 cube.get_face('U') / ('R') / ('F') 等获取各个面，再设置颜色
+    faces_order = ['U', 'L', 'F', 'R', 'B', 'D']  # 根据你的展平顺序来
+    for face_idx, face_name in enumerate(faces_order):
+        face_9 = state_6x9[face_idx]  # 这一行的 9 个颜色字符
+        face_obj = cube.get_face(face_name)
+        # 按 3×3 写入
+        idx = 0
+        for row in range(3):
+            for col in range(3):
+                face_obj[row][col].color = face_9[idx]
+                idx += 1
+    return cube
