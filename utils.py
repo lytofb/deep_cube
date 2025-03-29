@@ -1,4 +1,6 @@
 # utils.py
+import random
+
 import torch
 import pycuber as pc
 
@@ -103,23 +105,52 @@ def convert_tensor_to_state_6x9(tensor_54, id_to_color=None):
     return state_6x9
 
 
+char_to_fullcolor = {
+    'r': 'red',
+    'g': 'green',
+    'b': 'blue',
+    'y': 'yellow',
+    'w': 'white',
+    'o': 'orange',
+    'u': 'unknown'
+}
+
+
 def create_cube_from_6x9(state_6x9):
     """
     根据 6×9 颜色字符布局，构造一个 pycuber.Cube 实例。
 
-    假设 6×9 的行顺序分别对应 (U, R, F, D, L, B) 六个面，
-    且每行的 9 个字符按 row-major(3×3) 顺序排列。
+    假设 6×9 的行顺序分别对应 (U, L, F, R, B, D) 六个面，
+    且每行的 9 个字符按 row-major (3×3) 顺序排列。
     """
     cube = pc.Cube()
-    # PyCuber 里可通过 cube.get_face('U') / ('R') / ('F') 等获取各个面，再设置颜色
-    faces_order = ['U', 'L', 'F', 'R', 'B', 'D']  # 根据你的展平顺序来
+    faces_order = ['U', 'L', 'F', 'R', 'B', 'D']
     for face_idx, face_name in enumerate(faces_order):
-        face_9 = state_6x9[face_idx]  # 这一行的 9 个颜色字符
+        face_str = state_6x9[face_idx]  # 这一行包含该面 9 个颜色字符
         face_obj = cube.get_face(face_name)
-        # 按 3×3 写入
         idx = 0
         for row in range(3):
             for col in range(3):
-                face_obj[row][col].color = face_9[idx]
+                face_obj[row][col].colour = char_to_fullcolor[face_str[idx]]
                 idx += 1
     return cube
+
+
+def random_scramble_cube(steps=20):
+    """随机打乱一个魔方并返回 (cube, moves)"""
+    moves = [random.choice(MOVES_POOL) for _ in range(steps)]
+    c = pc.Cube()
+    for mv in moves:
+        c(mv)
+    return c, moves
+
+if __name__ == '__main__':
+    # cube,moves = random_scramble_cube(5)
+    cube = pc.Cube()
+    print(cube)
+    state_54 = cube_to_6x9(cube)
+    print(state_54)
+    cube2 = create_cube_from_6x9(state_54)
+    print(cube2)
+    # print(cube2==cube)
+    # cube2("L")

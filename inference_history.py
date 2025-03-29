@@ -10,12 +10,15 @@ from models.model_history_transformer import RubikSeq2SeqTransformer
 from tokenizer.tokenizer_rubik import RubikTokenizer
 from utils import SOS_TOKEN, EOS_TOKEN, PAD_TOKEN, MASK_OR_NOMOVE_TOKEN, \
     convert_tensor_to_state_6x9, create_cube_from_6x9, cube_to_6x9, convert_state_to_tensor  # 或者你自己定义好的几个特殊token
+from cube_rotate import move_cube
 import torch.nn.functional as F
 
 from omegaconf import OmegaConf
+
 config = OmegaConf.load("config.yaml")
 
 tokenizer = RubikTokenizer()
+
 def greedy_decode_seq2seq(
         model,
         src,  # (1, src_seq_len, 55)
@@ -89,7 +92,7 @@ def evaluate_seq2seq_accuracy(model, dataloader, device):
             if printed_samples < 3:
                 print(f"Sample {printed_samples}:")
                 # print("  src.o:                ", src[i].cpu().tolist())
-                print("  src:                ", src[i].cpu()[:,-1])
+                print("  src:                ", src[i].cpu()[:, -1])
                 print("  tgt:                ", tgt[i].cpu().tolist())
                 print("  pred_tokens:   ", pred_tokens[i].cpu().tolist())
                 print("  target_output: ", target_output[i].cpu().tolist())
@@ -104,6 +107,7 @@ def evaluate_seq2seq_accuracy(model, dataloader, device):
         return 0.0
     return total_correct / total_count
 
+
 def build_src_tensor_from_steps(steps, history_len=8):
     # steps 的长度
     total_len = len(steps)
@@ -117,7 +121,7 @@ def build_src_tensor_from_steps(steps, history_len=8):
 
     # 找到本次要用的窗口: 从 max(0, total_len - (history_len+1)) 到 total_len
     start_idx = max(0, total_len - (history_len + 1))
-    used_steps = steps[start_idx : total_len]
+    used_steps = steps[start_idx: total_len]
 
     # 用于将真实 steps 数据对齐到 src_seq 最右侧
     offset = (history_len + 1) - len(used_steps)
@@ -130,6 +134,7 @@ def build_src_tensor_from_steps(steps, history_len=8):
 
     # 扩展出 batch 维度 => (1, history_len+1, 55)
     return src_seq.unsqueeze(0)
+
 
 @torch.no_grad()
 def evaluate_seq2seq_accuracy_with_repetition_penalty(model, dataloader, device, history_len=8, max_len=50):
@@ -156,7 +161,7 @@ def evaluate_seq2seq_accuracy_with_repetition_penalty(model, dataloader, device,
     for src, tgt in dataloader:
         batch_size = src.size(0)
         for i in range(batch_size):
-            if sample_count >= 2:
+            if sample_count >= 5:
                 break
 
             # 取单个样本，假设 src 的最后一部分包含初始状态信息
@@ -186,6 +191,23 @@ def evaluate_seq2seq_accuracy_with_repetition_penalty(model, dataloader, device,
                     prev_token = decoded_tokens[-1]
                     last_logits[0, prev_token] = -float('inf')
 
+                # 1) 将 last_logits 转为概率分布
+                temperature = 1.2  # 例如 1.2，>1 会使分布更平滑；<1 会使分布更尖锐
+
+                # 5) 做 softmax 转为概率分布，然后 top-p 采样
+                #    在 softmax 之前先用 “/ temperature” 调整 logits
+                probs = F.softmax(last_logits / temperature, dim=-1).squeeze(0)  # shape: (num_moves,)
+
+                # 2) 打印当前的 state (steps[-1][0]) 以及概率向量
+                print(f"[Step {t}] Current State:")
+                print(steps[-1][0].cpu().numpy().tolist())  # 或者只打印部分
+
+                print(f"[Step {t}] Logits Probabilities:")
+                # 获取 numpy 数组，并格式化每个概率为科学计数法，保留两位小数
+                probs_np = probs.cpu().numpy()
+                formatted_probs = [f"{p:.2e}" for p in probs_np]
+                print(formatted_probs)
+
                 # 选择下一个 token
                 next_token_id = torch.argmax(last_logits, dim=1).item()
                 if next_token_id == EOS_TOKEN:
@@ -214,12 +236,13 @@ def evaluate_seq2seq_accuracy_with_repetition_penalty(model, dataloader, device,
             print("  Ground truth:     ", ground_truth)
             sample_count += 1
 
-        if sample_count >= 2:
+        if sample_count >= 5:
             break
 
     if total_count == 0:
         return 0.0
     return total_correct / total_count
+
 
 @torch.no_grad()
 def _beam_search_step_with_repetition_penalty(model, src, beam, beam_size=3, max_steps=1, device="cuda"):
@@ -254,7 +277,7 @@ def _beam_search_step_with_repetition_penalty(model, src, beam, beam_size=3, max
             probs = F.softmax(last_logits, dim=-1)
             # 取 top-k 候选动作
             topk_probs, topk_indices = torch.topk(probs, k=beam_size, dim=-1)
-            topk_probs = topk_probs.squeeze(0)      # (beam_size,)
+            topk_probs = topk_probs.squeeze(0)  # (beam_size,)
             topk_indices = topk_indices.squeeze(0)  # (beam_size,)
 
             # 对每个候选扩展
@@ -316,7 +339,7 @@ def evaluate_seq2seq_accuracy_with_beam_search(model, dataloader, device, histor
     for src, tgt in dataloader:
         batch_size = src.size(0)
         for i in range(batch_size):
-            if sample_count >= 2:
+            if sample_count >= 5:
                 break
 
             # 取单个样本，src shape: (1, seq_len, 55)，tgt shape: (1, tgt_seq_len)
@@ -338,7 +361,8 @@ def evaluate_seq2seq_accuracy_with_beam_search(model, dataloader, device, histor
                 # 根据最近 history_len 步构造输入 tensor，形状: (1, history_len+1, 55)
                 input_tensor = build_src_tensor_from_steps(steps, history_len=history_len).to(device)
                 # 使用 Beam Search 进行一步扩展
-                next_tokens = _beam_search_step_with_repetition_penalty(model, input_tensor, beam, beam_size=beam_size, max_steps=1, device=device)
+                next_tokens = _beam_search_step_with_repetition_penalty(model, input_tensor, beam, beam_size=beam_size,
+                                                                        max_steps=1, device=device)
                 if not next_tokens:
                     break
                 next_token_id = next_tokens[0]
@@ -364,7 +388,7 @@ def evaluate_seq2seq_accuracy_with_beam_search(model, dataloader, device, histor
             print("  Ground truth:     ", ground_truth)
             sample_count += 1
 
-        if sample_count >= 2:
+        if sample_count >= 5:
             break
 
     if total_count == 0:
@@ -372,6 +396,7 @@ def evaluate_seq2seq_accuracy_with_beam_search(model, dataloader, device, histor
     return total_correct / total_count
 
 
+@torch.no_grad()
 def evaluate_seq2seq_accuracy_with_repetition_penalty_top_p(
         model, dataloader, device, history_len=8, max_len=50, p=0.9
 ):
@@ -398,7 +423,7 @@ def evaluate_seq2seq_accuracy_with_repetition_penalty_top_p(
     for src, tgt in dataloader:
         batch_size = src.size(0)
         for i in range(batch_size):
-            if sample_count >= 5:
+            if sample_count >= 2:
                 break
 
             # 取单个样本
@@ -431,8 +456,21 @@ def evaluate_seq2seq_accuracy_with_repetition_penalty_top_p(
                     prev_token = decoded_tokens[-1]
                     last_logits[0, prev_token] = -float('inf')
 
+                temperature = 1.5  # 例如 1.2，>1 会使分布更平滑；<1 会使分布更尖锐
+
                 # 5) 做 softmax 转为概率分布，然后 top-p 采样
-                probs = F.softmax(last_logits, dim=-1).squeeze(0)  # shape: (num_moves,)
+                #    在 softmax 之前先用 “/ temperature” 调整 logits
+                probs = F.softmax(last_logits / temperature, dim=-1).squeeze(0)  # shape: (num_moves,)
+                # 2) 打印当前的 state (steps[-1][0]) 以及概率向量
+                print(f"[Step {t}] Current State:")
+                print(steps[-1][0].cpu().numpy().tolist())  # 或者只打印部分
+
+                print(f"[Step {t}] Logits Probabilities:")
+                # 获取 numpy 数组，并格式化每个概率为科学计数法，保留两位小数
+                probs_np = probs.cpu().numpy()
+                formatted_probs = [f"{p:.2e}" for p in probs_np]
+                print(formatted_probs)
+
                 next_token_id = top_p_sampling(probs, p=p)
 
                 # 6) 若预测到 EOS_TOKEN 则停止
@@ -463,7 +501,7 @@ def evaluate_seq2seq_accuracy_with_repetition_penalty_top_p(
             print("  Ground truth:     ", ground_truth)
             sample_count += 1
 
-        if sample_count >= 5:
+        if sample_count >= 2:
             break
 
     if total_count == 0:
@@ -495,8 +533,8 @@ def top_p_sampling(probabilities: torch.Tensor, p=0.9):
     # 4. 截断到这个cutoff_idx（也可+1，确保至少包含该位置token）
     #    例如 cumulative_probs=[0.3,0.5,0.6,0.9, ...]，若p=0.7则 cutoff_idx=2
     #    只取 sorted_indices[:3] => 0,1,2
-    truncated_indices = sorted_indices[:cutoff_idx+1]
-    truncated_probs = sorted_probs[:cutoff_idx+1]
+    truncated_indices = sorted_indices[:cutoff_idx + 1]
+    truncated_probs = sorted_probs[:cutoff_idx + 1]
 
     # 5. 在截断后的概率分布中做归一化，并进行一次随机采样
     truncated_probs = truncated_probs / truncated_probs.sum()
@@ -524,15 +562,9 @@ def update_state(old_state_tensor, next_token_id):
     # 1) 从旧的 54 维张量 -> 6x9 颜色布局
     old_state_6x9 = convert_tensor_to_state_6x9(old_state_tensor)
 
-    # 2) 构造 pycuber.Cube
-    cube = create_cube_from_6x9(old_state_6x9)
-
     # 3) 根据 token_id 找到动作字符串，然后执行 move
     move_str = tokenizer.decode_move(next_token_id)
-    cube(move_str)
-
-    # 4) 读出新的 6x9 颜色布局
-    new_state_6x9 = cube_to_6x9(cube)
+    new_state_6x9 = move_cube(old_state_6x9,move_str)
 
     # 5) 调用你的 convert_state_to_tensor，把 6x9 布局转回 54 维张量
     new_state_tensor = convert_state_to_tensor(new_state_6x9)
@@ -580,9 +612,12 @@ def main():
     model.eval()
 
     val_acc = evaluate_seq2seq_accuracy(model, val_loader, device)
-    evaluate_seq2seq_accuracy_with_repetition_penalty(model, val_loader,device)
-    # evaluate_seq2seq_accuracy_with_beam_search(model, val_loader,device)
-    # evaluate_seq2seq_accuracy_with_repetition_penalty_top_p(model,val_loader,device)
+    # print("==============evaluate_seq2seq_accuracy_with_repetition_penalty==============")
+    # evaluate_seq2seq_accuracy_with_repetition_penalty(model, val_loader, device)
+    # print("==============evaluate_seq2seq_accuracy_with_beam_search==============")
+    # evaluate_seq2seq_accuracy_with_beam_search(model, val_loader, device)
+    print("==============evaluate_seq2seq_accuracy_with_repetition_penalty_top_p==============")
+    evaluate_seq2seq_accuracy_with_repetition_penalty_top_p(model, val_loader, device, p=0.9)
     print(f"[Validation], Val_Acc={val_acc:.4f}")
 
 

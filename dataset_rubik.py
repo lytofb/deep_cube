@@ -87,7 +87,7 @@ class RubikDataset(Dataset):
 
                 # 构造 tgt：以 SOS 为起始符，后面跟从当前时刻 t 开始直到解法结束的 move 序列
                 tgt_list = [self.SOS_token]
-                for idx in range(t, len(steps)):
+                for idx in range(t+1, len(steps)):
                     _, mv = steps[idx]
                     move_idx = self.tokenizer.encode_move(mv)
                     tgt_list.append(move_idx)
@@ -148,7 +148,7 @@ class RubikDataset(Dataset):
 
                         # 构造 tgt：以 SOS 为起始符，后面跟从当前时刻 t 开始直到解法结束的 move 序列
                         tgt_list = [self.SOS_token]
-                        for idx in range(t, len(steps)):
+                        for idx in range(t+1, len(steps)):
                             _, mv = steps[idx]
                             move_idx = self.tokenizer.encode_move(mv)
                             tgt_list.append(move_idx)
@@ -199,7 +199,7 @@ class RubikDataset(Dataset):
 
         # 构造 tgt_seq：以 SOS 开始，后续为 t 到结束的 move 序列，最后追加 EOS
         tgt_list = [self.SOS_token]
-        for idx in range(t, len(steps)):
+        for idx in range(t+1, len(steps)):
             _, mv = steps[idx]
             move_idx = self.tokenizer.encode_move(mv)
             tgt_list.append(move_idx)
