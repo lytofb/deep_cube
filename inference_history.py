@@ -198,6 +198,14 @@ def evaluate_seq2seq_accuracy_with_repetition_penalty(model, dataloader, device,
                 #    在 softmax 之前先用 “/ temperature” 调整 logits
                 probs = F.softmax(last_logits / temperature, dim=-1).squeeze(0)  # shape: (num_moves,)
 
+                # 打印当前步骤、decoder_tokens 和 steps 信息
+                print(f"[Step {t}] Steps:")
+                # 如果 steps 是一个列表，每个元素可能包含多个信息，这里逐个打印
+                for idx, step in enumerate(steps):
+                    print(f"  Step {idx}: {step}")
+
+                print(f"[Step {t}] Decoder tokens: {decoder_tokens}")
+
                 # 2) 打印当前的 state (steps[-1][0]) 以及概率向量
                 print(f"[Step {t}] Current State:")
                 print(steps[-1][0].cpu().numpy().tolist())  # 或者只打印部分
@@ -210,10 +218,10 @@ def evaluate_seq2seq_accuracy_with_repetition_penalty(model, dataloader, device,
 
                 # 选择下一个 token
                 next_token_id = torch.argmax(last_logits, dim=1).item()
-                if next_token_id == EOS_TOKEN:
-                    break
-                # if next_token_id == EOS_TOKEN or next_token_id == PAD_TOKEN:
+                # if next_token_id == EOS_TOKEN:
                 #     break
+                if next_token_id == EOS_TOKEN or next_token_id == PAD_TOKEN:
+                    break
                 decoded_tokens.append(next_token_id)
                 decoder_tokens.append(next_token_id)
 
