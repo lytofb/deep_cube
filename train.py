@@ -295,7 +295,7 @@ def main():
     log_model(experiment, model=model, model_name="TheModel")
 
     # 3. Optimizer & Loss
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(ignore_index=PAD_TOKEN)
     optimizer = optim.Adam(model.parameters(), lr=config.train.learning_rate, weight_decay=config.train.weight_decay)
 
     scheduler = LinearWarmupCosineAnnealingLR(
@@ -420,7 +420,7 @@ def main_ddp():
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 
     # 3. Optimizer & Loss
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(ignore_index=PAD_TOKEN)
     optimizer = optim.Adam(model.parameters(), lr=config.train.learning_rate, weight_decay=config.train.weight_decay)
 
     scheduler = LinearWarmupCosineAnnealingLR(
