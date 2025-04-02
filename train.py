@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import random
 from utils import PAD_TOKEN,EOS_TOKEN,SOS_TOKEN
-from typing import Union, Optional, Tuple
+
 
 from inference import iterative_greedy_decode_seq2seq, random_scramble_cube, beam_search
 
@@ -88,7 +88,7 @@ def train_one_epoch_seq2seq_mix(model, dataloader, optimizer, criterion, device,
     total_loss = 0.0
 
     # 设置 scheduled sampling 的概率（例如：前期主要用 teacher forcing，后期逐渐使用更多模型预测）
-    sampling_prob = min(0.5, epoch / total_epochs * 0.5 + 0.3)
+    sampling_prob = min(0.6, epoch / total_epochs * 0.5 + 0.3)
 
     for src, tgt in tqdm(dataloader, desc=f"Training (epoch={epoch})"):
         src = src.to(device, non_blocking=True)
@@ -225,78 +225,6 @@ def create_collate_fn_random_trunc(max_history_len: int, pad_token: int = PAD_TO
 
     return collate_fn_random_trunc
 
-def get_optim_groups(self, weight_decay: float=1e-3):
-    """
-    This long function is unfortunately doing something very simple and is being very defensive:
-    We are separating out all parameters of the model into two buckets: those that will experience
-    weight decay for regularization and those that won't (biases, and layernorm/embedding weights).
-    We are then returning the PyTorch optimizer object.
-    """
-
-    # separate out all parameters to those that will and won't experience regularizing weight decay
-    decay = set()
-    no_decay = set()
-    whitelist_weight_modules = (torch.nn.Linear, torch.nn.MultiheadAttention)
-    blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
-    for mn, m in self.named_modules():
-        for pn, p in m.named_parameters():
-            fpn = "%s.%s" % (mn, pn) if mn else pn  # full param name
-
-            if pn.endswith("bias"):
-                # all biases will not be decayed
-                no_decay.add(fpn)
-            elif pn.startswith("bias"):
-                # MultiheadAttention bias starts with "bias"
-                no_decay.add(fpn)
-            elif pn.endswith("weight") and isinstance(m, whitelist_weight_modules):
-                # weights of whitelist modules will be weight decayed
-                decay.add(fpn)
-            elif pn.endswith("weight") and isinstance(m, blacklist_weight_modules):
-                # weights of blacklist modules will NOT be weight decayed
-                no_decay.add(fpn)
-
-    # special case the position embedding parameter in the root GPT module as not decayed
-    # no_decay.add("pos_emb")
-    # no_decay.add("_dummy_variable")
-    # if self.cond_pos_emb is not None:
-    #     no_decay.add("cond_pos_emb")
-
-    # validate that we considered every parameter
-    param_dict = {pn: p for pn, p in self.named_parameters()}
-    inter_params = decay & no_decay
-    union_params = decay | no_decay
-    assert (
-        len(inter_params) == 0
-    ), "parameters %s made it into both decay/no_decay sets!" % (str(inter_params),)
-    assert (
-        len(param_dict.keys() - union_params) == 0
-    ), "parameters %s were not separated into either decay/no_decay set!" % (
-        str(param_dict.keys() - union_params),
-    )
-
-    # create the pytorch optimizer object
-    optim_groups = [
-        {
-            "params": [param_dict[pn] for pn in sorted(list(decay))],
-            "weight_decay": weight_decay,
-        },
-        {
-            "params": [param_dict[pn] for pn in sorted(list(no_decay))],
-            "weight_decay": 0.0,
-        },
-    ]
-    return optim_groups
-
-
-def configure_optimizers(
-        learning_rate: float=1e-4,
-        weight_decay: float=1e-3,
-        betas: Tuple[float, float]=(0.9,0.95)):
-    optim_groups = get_optim_groups(weight_decay=weight_decay)
-    optimizer = torch.optim.AdamW(
-        optim_groups, lr=learning_rate, betas=betas
-    )
-    return optimizer
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -371,7 +299,7 @@ def main():
 
     # 3. Optimizer & Loss
     criterion = nn.CrossEntropyLoss(ignore_index=PAD_TOKEN)
-    optimizer = configure_optimizers(learning_rate=config.train.learning_rate, weight_decay=config.train.weight_decay)
+    optimizer = model.configure_optimizers(learning_rate=config.train.learning_rate, weight_decay=config.train.weight_decay)
     # optimizer = optim.Adam(model.parameters(), lr=config.train.learning_rate, weight_decay=config.train.weight_decay)
 
     scheduler = LinearWarmupCosineAnnealingLR(
@@ -497,7 +425,7 @@ def main_ddp():
 
     # 3. Optimizer & Loss
     criterion = nn.CrossEntropyLoss(ignore_index=PAD_TOKEN)
-    optimizer = configure_optimizers(learning_rate=config.train.learning_rate,weight_decay=config.train.weight_decay)
+    optimizer = model.configure_optimizers(learning_rate=config.train.learning_rate,weight_decay=config.train.weight_decay)
     # optimizer = optim.Adam(model.parameters(), lr=config.train.learning_rate, weight_decay=config.train.weight_decay)
 
     scheduler = LinearWarmupCosineAnnealingLR(
