@@ -322,8 +322,8 @@ def main():
         val_acc = evaluate_seq2seq_accuracy(model, val_loader, device)
         print(f"[Validation] Epoch {epoch}, Val_Acc={val_acc:.4f}")
 
-        # 每 50 个 epoch 做一次验证
-        if epoch % 50 == 0:
+        # 每 20 个 epoch 做一次验证
+        if epoch % 20 == 0:
 
             # 保存当前 epoch 的模型
             ckpt_path = f"rubik_model_epoch{epoch}.pth"
@@ -357,11 +357,13 @@ def main_ddp():
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
 
-    experiment = start(
-      api_key=config.comet.api_key,
-      project_name=config.comet.project_name,
-      workspace=config.comet.workspace
-    )
+    if dist.get_rank() == 0:
+        experiment = start(
+          api_key=config.comet.api_key,
+          project_name=config.comet.project_name,
+          workspace=config.comet.workspace
+        )
+        experiment.log_parameters(OmegaConf.to_container(config, resolve=True))
 
     # 1. Dataset & DataLoader
     train_dataset = RubikDataset(data_dir=config.data.train_dir,
@@ -420,8 +422,6 @@ def main_ddp():
     model.apply(init_weights)  # 新增：应用 He 初始化
     model = model.to(device)
 
-    # 用 DDP 包装
-    model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 
     # 3. Optimizer & Loss
     criterion = nn.CrossEntropyLoss(ignore_index=PAD_TOKEN)
@@ -433,6 +433,9 @@ def main_ddp():
         warmup_epochs=config.train.warmup_epochs,
         max_epochs=config.train.max_epochs
     )
+
+    # 用 DDP 包装
+    model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 
     # 4. Training loop
     epochs = config.train.max_epochs
@@ -475,8 +478,8 @@ def main_ddp():
                 model.train()
 
                 # 请在这里帮我实现一下free run evaluate，并打印出预测的token都是什么
-            # 每 50 个 epoch 做一次验证
-            if epoch % 50 == 0:
+            # 每 20 个 epoch 做一次验证
+            if epoch % 20 == 0:
 
                 # 保存当前 epoch 的模型
                 ckpt_path = f"rubik_model_epoch{epoch}.pth"
