@@ -72,7 +72,7 @@ class RubikSeq2SeqTransformer(nn.Module):
             dim_feedforward=4 * d_model,
             dropout=dropout,
             activation='gelu',
-            batch_first=True,
+            batch_first=False,
             norm_first=True  # important for stability
         )
         self.decoder = nn.TransformerDecoder(
