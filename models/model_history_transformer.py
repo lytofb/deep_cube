@@ -1,5 +1,7 @@
 import torch
 import torch.nn as nn
+
+from models.positional_embedding import SinusoidalPosEmb
 from utils import PAD_TOKEN,VOCAB_SIZE
 from typing import Union, Optional, Tuple
 
@@ -49,11 +51,34 @@ class RubikSeq2SeqTransformer(nn.Module):
 
         # Encoder：对魔方状态进行线性映射，然后加上位置编码
         self.src_linear = nn.Linear(input_dim, d_model)
-        self.src_pos_embedding = nn.Embedding(max_seq_len, d_model)
+        self.src_pos_embedding = SinusoidalPosEmb(d_model)
+        # self.src_pos_embedding = nn.Embedding(max_seq_len, d_model)
 
         # Decoder：对 move 索引进行嵌入，并加上位置编码
         self.tgt_embedding = nn.Embedding(num_moves, d_model, padding_idx=PAD_TOKEN)
-        self.tgt_pos_embedding = nn.Embedding(max_seq_len, d_model)
+        self.tgt_pos_embedding = SinusoidalPosEmb(d_model)
+        # self.tgt_pos_embedding = nn.Embedding(max_seq_len, d_model)
+
+        self.encoder = nn.Sequential(
+            nn.Linear(d_model, 4 * d_model),
+            nn.Mish(),
+            nn.Linear(4 * d_model, d_model)
+        )
+
+        # decoder
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=4 * d_model,
+            dropout=dropout,
+            activation='gelu',
+            batch_first=True,
+            norm_first=True  # important for stability
+        )
+        self.decoder = nn.TransformerDecoder(
+            decoder_layer=decoder_layer,
+            num_layers=num_layers
+        )
 
         # Transformer 模型（包含 Encoder 和 Decoder）
         self.transformer = nn.Transformer(
@@ -65,6 +90,7 @@ class RubikSeq2SeqTransformer(nn.Module):
             dropout=dropout  # <-- 让 Transformer 自身的多头注意力和前馈层也应用 Dropout
         )
 
+        self.ln_f = nn.LayerNorm(d_model)
         # 输出层：将 Transformer 输出投影到 move 词汇表上
         self.fc_out = nn.Linear(d_model, num_moves)
 
@@ -173,6 +199,7 @@ class RubikSeq2SeqTransformer(nn.Module):
 
         # 在 Encoder 输入阶段也加个 Dropout
         src = self.src_emb_dropout(src)
+        memory = self.encoder(src)
 
         # ------- Decoder Embedding -------
         tgt_input = tgt_input.permute(1, 0)  # => (tgt_seq_len-1, B)
@@ -183,20 +210,28 @@ class RubikSeq2SeqTransformer(nn.Module):
         # 在 Decoder 输入阶段也加个 Dropout
         tgt_emb = self.tgt_emb_dropout(tgt_emb)
 
+
         # ------- Causal Mask -------
         tgt_mask = self.generate_square_subsequent_mask(tgt_emb.size(0)).to(tgt_emb.device)
+        out = self.decoder(
+            tgt=tgt_emb,
+            memory=memory,
+            tgt_mask=tgt_mask,
+            memory_key_padding_mask=src_key_padding_mask
+        )
 
         # ------- Transformer -------
-        out = self.transformer(
-            src=src,
-            tgt=tgt_emb,
-            tgt_mask=tgt_mask,
-            src_key_padding_mask=src_key_padding_mask,  # 屏蔽Encoder端PAD
-            tgt_key_padding_mask=tgt_key_padding_mask,
-            tgt_is_causal=True
-        )
+        # out = self.transformer(
+        #     src=src,
+        #     tgt=tgt_emb,
+        #     tgt_mask=tgt_mask,
+        #     src_key_padding_mask=src_key_padding_mask,  # 屏蔽Encoder端PAD
+        #     tgt_key_padding_mask=tgt_key_padding_mask,
+        #     tgt_is_causal=True
+        # )
         out = out.permute(1, 0, 2)  # => (B, tgt_seq_len-1, d_model)
-        out = self.dropout1(out)
+        # out = self.dropout1(out)
+        out = self.ln_f(out)
         logits = self.fc_out(out)  # => (B, tgt_seq_len-1, num_moves)
         return logits
 
