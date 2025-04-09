@@ -47,9 +47,9 @@ def cube_to_kociemba(cube):
     color_to_face = {
         'y': 'U',
         'g': 'F',
-        'r': 'R',
+        'o': 'R',
         'b': 'B',
-        'o': 'L',
+        'r': 'L',
         'w': 'D'
     }
     cube_str = ""
