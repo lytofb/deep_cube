@@ -51,13 +51,14 @@ def cube_to_kociemba(cube):
     并且将颜色映射为面字母： 'y' -> 'U', 'g' -> 'F', 'r' -> 'R',
     'b' -> 'B', 'o' -> 'L', 'w' -> 'D'
     """
+    # colours = {"L": "red", "U": "yellow", "F": "green", "D": "white", "R": "orange", "B": "blue"}
     order = ['U', 'R', 'F', 'D', 'L', 'B']
     color_to_face = {
         'y': 'U',
         'g': 'F',
-        'r': 'R',
+        'o': 'R',
         'b': 'B',
-        'o': 'L',
+        'r': 'L',
         'w': 'D'
     }
     cube_str = ""
@@ -79,7 +80,7 @@ def kociemba_solver(cube_str):
     请根据实际路径修改 solver_path
     """
     solver_path = os.path.expanduser(
-        "~/Public/qugy_workspace/data_dir/deep_cube_github/kociemba/kociemba/ckociemba/bin/kociemba")
+        "kociemba")
     try:
         result = subprocess.check_output([solver_path, cube_str])
         solution_str = result.decode('utf-8').strip()
@@ -125,8 +126,8 @@ def generate_single_case(min_scramble=8, max_scramble=25):
         steps.append((cube_to_6x9(cube), move))
 
     data_item = {
-        # 'scramble': scramble_str,
-        # 'solution': solution_str,
+        'scramble': scramble_str,
+        'solution': solution_str,
         'steps': steps
     }
     # print(data_item)
@@ -147,7 +148,7 @@ def generate_dataset(n=100):
 
 if __name__ == "__main__":
     # 生成测试数据，例如生成 10000 条数据
-    dataset = generate_dataset(n=10000)
+    dataset = generate_dataset(n=1)
     # 保存到硬盘（此处使用 pickle 保存）
     with open("rubik_shards/rubik_data.pkl", "wb") as f:
         pickle.dump(dataset, f)
