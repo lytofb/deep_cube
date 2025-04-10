@@ -1,3 +1,5 @@
+from typing import Tuple
+
 import torch
 import torch.nn as nn
 import einops
@@ -16,9 +18,8 @@ class RubikGPT(nn.Module):
                  num_layers=4,
                  max_seq_len=100,     # 最长时间序列 (history_len+1) 的估计
                  # 你可以根据自己需求调整 feedforward、dropout、num_layers 等
-                 ff_dim=512,         # feedforward 内部层维度
                  dropout=0.1,
-                 vocab_size=21       # 假设我们要预测 21 种离散动作,仅作演示
+                 vocab_size=22       # 假设我们要预测 21 种离散动作,仅作演示
                  ):
         super().__init__()
         self.d_model = d_model
@@ -85,7 +86,7 @@ class RubikGPT(nn.Module):
 
         # 3) 拼接 token：先 stack => (B,T,2,d_model)，再 reshape => (B,2T,d_model)
         #    其中每个时间步 t，会依次是 state_emb[t], action_emb[t]
-        combined_emb = torch.stack([state_emb, action_emb], dim=2)  # (B, T, 2, d_model)
+        combined_emb = torch.stack([action_emb, state_emb], dim=2)  # (B, T, 2, d_model)
         combined_emb = einops.rearrange(combined_emb, "b t two d -> b (t two) d")  # (B, 2T, d_model)
 
         # 4) 准备位置编码
@@ -102,13 +103,13 @@ class RubikGPT(nn.Module):
         # 5) 因果 Mask：防止看到后面token
         #    nn.TransformerDecoder 需要 (L, L) 的 mask, 其中 L=2T
         combined_emb = einops.rearrange(combined_emb, "b seq d -> seq b d")  # => (2T, B, d_model)
-        seq_len = combined_emb.size(0)
+        # seq_len = combined_emb.size(0)
         # causal_mask: 上三角为 -inf (阻止访问未来token)
-        causal_mask = torch.triu(
-            torch.ones(seq_len, seq_len, device=src.device),
-            diagonal=1
-        )
-        causal_mask = causal_mask.masked_fill(causal_mask==1, float('-inf'))
+        # causal_mask = torch.triu(
+        #     torch.ones(seq_len, seq_len, device=src.device),
+        #     diagonal=1
+        # )
+        # causal_mask = causal_mask.masked_fill(causal_mask==1, float('-inf'))
 
         # 6) 调用 TransformerDecoder
         #    因为是 GPT-like，自回归，所以 memory 我们可以弄个假的全零即可
@@ -129,6 +130,78 @@ class RubikGPT(nn.Module):
 
         return logits
 
+    def get_optim_groups(self, weight_decay: float = 1e-3):
+        """
+        This long function is unfortunately doing something very simple and is being very defensive:
+        We are separating out all parameters of the model into two buckets: those that will experience
+        weight decay for regularization and those that won't (biases, and layernorm/embedding weights).
+        We are then returning the PyTorch optimizer object.
+        """
+
+        # separate out all parameters to those that will and won't experience regularizing weight decay
+        decay = set()
+        no_decay = set()
+        whitelist_weight_modules = (torch.nn.Linear, torch.nn.MultiheadAttention)
+        blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
+        for mn, m in self.named_modules():
+            for pn, p in m.named_parameters():
+                fpn = "%s.%s" % (mn, pn) if mn else pn  # full param name
+
+                if pn.endswith("bias"):
+                    # all biases will not be decayed
+                    no_decay.add(fpn)
+                elif pn.startswith("bias"):
+                    # MultiheadAttention bias starts with "bias"
+                    no_decay.add(fpn)
+                elif pn.endswith("weight") and isinstance(m, whitelist_weight_modules):
+                    # weights of whitelist modules will be weight decayed
+                    decay.add(fpn)
+                elif pn.endswith("weight") and isinstance(m, blacklist_weight_modules):
+                    # weights of blacklist modules will NOT be weight decayed
+                    no_decay.add(fpn)
+
+        # special case the position embedding parameter in the root GPT module as not decayed
+        # no_decay.add("pos_emb")
+        # no_decay.add("_dummy_variable")
+        # if self.cond_pos_emb is not None:
+        #     no_decay.add("cond_pos_emb")
+
+        # validate that we considered every parameter
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        inter_params = decay & no_decay
+        union_params = decay | no_decay
+        assert (
+                len(inter_params) == 0
+        ), "parameters %s made it into both decay/no_decay sets!" % (str(inter_params),)
+        assert (
+                len(param_dict.keys() - union_params) == 0
+        ), "parameters %s were not separated into either decay/no_decay set!" % (
+            str(param_dict.keys() - union_params),
+        )
+
+        # create the pytorch optimizer object
+        optim_groups = [
+            {
+                "params": [param_dict[pn] for pn in sorted(list(decay))],
+                "weight_decay": weight_decay,
+            },
+            {
+                "params": [param_dict[pn] for pn in sorted(list(no_decay))],
+                "weight_decay": 0.0,
+            },
+        ]
+        return optim_groups
+
+    def configure_optimizers(self,
+                             learning_rate: float = 1e-4,
+                             weight_decay: float = 1e-3,
+                             betas: Tuple[float, float] = (0.9, 0.95)):
+        optim_groups = self.get_optim_groups(weight_decay=weight_decay)
+        optimizer = torch.optim.AdamW(
+            optim_groups, lr=learning_rate, betas=betas
+        )
+        return optimizer
+
 
 # ------------------- 测试一下 -------------------
 if __name__ == "__main__":
@@ -137,7 +210,7 @@ if __name__ == "__main__":
     T = 5
     dummy_src = torch.randn(B, T, 55)  # (B, T, 55)
 
-    model = RubikGPT(d_model=64, nhead=4, num_layers=2, max_seq_len=10, ff_dim=128, vocab_size=21)
+    model = RubikGPT(d_model=64, nhead=4, num_layers=2, max_seq_len=10, vocab_size=22)
     output = model(dummy_src)  # => (B, 2*T, vocab_size)
     print("output shape =", output.shape)
-    # 预期: (2, 10, 21)  (B=2, 2*T=10, vocab_size=21)
+    # 预期: (2, 10, 22)  (B=2, 2*T=10, vocab_size=21)

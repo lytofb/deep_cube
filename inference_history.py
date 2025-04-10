@@ -100,8 +100,10 @@ def evaluate_seq2seq_accuracy(model, dataloader, device):
             else:
                 break
 
-        total_correct += (pred_tokens == target_output).sum().item()
-        total_count += target_output.numel()
+        mask = target_output != PAD_TOKEN
+        correct = (pred_tokens == target_output) & mask
+        total_correct += correct.sum().item()
+        total_count += mask.sum().item()
 
     if total_count == 0:
         return 0.0

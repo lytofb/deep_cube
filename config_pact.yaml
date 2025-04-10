@@ -1,0 +1,30 @@
+# config.yaml
+data:
+  train_dir: "rubik_kociemba_500k"
+  val_dir: "rubik_val_kociemba_shards"
+  num_samples: 1000
+  max_history_len: 8
+train:
+  batch_size: 2048
+  num_workers: 8
+  prefetch_factor: 4
+  learning_rate: 7e-4
+  weight_decay: 1e-6
+  warmup_epochs: 10
+  max_epochs: 300
+model:
+  input_dim: 55
+  d_model: 768
+  num_layers: 6
+  nhead: 12
+  num_moves: 22
+  max_seq_len: 50
+  dropout: 0.2
+comet:
+  api_key: "Kneh4rDqtRHtLmTN6AvhSShWA"
+  project_name: "deepcube"
+  workspace: "lytofb"
+inference:
+  model_path: "rubik_model_best.pth"
+  scramble_steps: 8
+  max_len: 50
