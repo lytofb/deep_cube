@@ -59,6 +59,20 @@ class RubikSeq2SeqTransformer(nn.Module):
         self.tgt_pos_embedding = SinusoidalPosEmb(d_model)
         # self.tgt_pos_embedding = nn.Embedding(max_seq_len, d_model)
 
+        # encoder_layer = nn.TransformerEncoderLayer(
+        #     d_model=d_model,
+        #     nhead=nhead,
+        #     dim_feedforward=4 * d_model,
+        #     dropout=dropout,
+        #     activation='gelu',
+        #     batch_first=False,
+        #     norm_first=True
+        # )
+        # self.encoder = nn.TransformerEncoder(
+        #     encoder_layer=encoder_layer,
+        #     num_layers=num_layers
+        # )
+
         self.encoder = nn.Sequential(
             nn.Linear(d_model, 4 * d_model),
             nn.Mish(),
@@ -81,14 +95,14 @@ class RubikSeq2SeqTransformer(nn.Module):
         )
 
         # Transformer 模型（包含 Encoder 和 Decoder）
-        self.transformer = nn.Transformer(
-            d_model=d_model,
-            nhead=nhead,
-            num_encoder_layers=num_layers,
-            num_decoder_layers=num_layers,
-            dim_feedforward=d_model * 4,
-            dropout=dropout  # <-- 让 Transformer 自身的多头注意力和前馈层也应用 Dropout
-        )
+        # self.transformer = nn.Transformer(
+        #     d_model=d_model,
+        #     nhead=nhead,
+        #     num_encoder_layers=num_layers,
+        #     num_decoder_layers=num_layers,
+        #     dim_feedforward=d_model * 4,
+        #     dropout=dropout  # <-- 让 Transformer 自身的多头注意力和前馈层也应用 Dropout
+        # )
 
         self.ln_f = nn.LayerNorm(d_model)
         # 输出层：将 Transformer 输出投影到 move 词汇表上
@@ -217,7 +231,8 @@ class RubikSeq2SeqTransformer(nn.Module):
             tgt=tgt_emb,
             memory=memory,
             tgt_mask=tgt_mask,
-            memory_key_padding_mask=src_key_padding_mask
+            memory_key_padding_mask=src_key_padding_mask,
+            tgt_key_padding_mask=tgt_key_padding_mask
         )
 
         # ------- Transformer -------
