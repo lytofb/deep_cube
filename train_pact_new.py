@@ -52,9 +52,9 @@ def transform_src_tgt(src, tgt):
     内容为：第一个token来自 tgt[:,0]，接下来的token来自 src[:, 1:, 54]
     """
     # 获取 tgt 的第 0 个元素，形状为 (B,)
-    first_token = tgt[:, 0]
+    last_token = tgt[:, 0]
     # 扩展维度，变为 (B, 1, 1)
-    first_token = first_token.unsqueeze(1).unsqueeze(2)
+    last_token = last_token.unsqueeze(1).unsqueeze(2)
 
     # 提取 src 中从第 1 个位置开始，第 55 个特征（索引为 54），形状为 (B, src_seq_len - 1)
     src_rest = src[:, 1:, 54]
@@ -62,7 +62,7 @@ def transform_src_tgt(src, tgt):
     src_rest = src_rest.unsqueeze(2)
 
     # 拼接两部分，沿序列维度（dim=1）
-    out = torch.cat([first_token, src_rest], dim=1)
+    out = torch.cat([src_rest,last_token], dim=1)
 
     return out
 
@@ -81,9 +81,9 @@ def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device):
 
         # 使用混合后的输入进行前向传播，计算最终 loss
         with autocast(enabled=use_amp):
-            logits = model(src)  # (B, seq_len, num_moves)
+            logits = model(src)  # (B, 2*seq_len, num_moves)
             action_logits = logits[:, 0::2, :]
-            loss = criterion(action_logits.view(-1, logits.size(-1)), target_output.contiguous().view(-1))
+            loss = criterion(action_logits.view(-1, action_logits.size(-1)), target_output.contiguous().view(-1))
 
         scaler.scale(loss).backward()
         # 先反缩放梯度
@@ -177,9 +177,10 @@ def evaluate_seq2seq_accuracy(model, dataloader, device):
         target_output = transform_src_tgt(src, tgt)
 
         logits = model(src)  # => (B, seq_len-1, num_moves)
+        action_logits = logits[:, 0::2, :]
         # 取 argmax => (B, seq_len-1)
-        pred_tokens = logits.argmax(dim=-1)
-
+        pred_tokens = action_logits.argmax(dim=-1)
+        pred_tokens = pred_tokens.unsqueeze(2)
         # 对齐 target_output => (B, seq_len-1)
         # 统计预测正确的数量
         mask = target_output != PAD_TOKEN
