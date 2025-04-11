@@ -5,6 +5,31 @@ from models.positional_embedding import SinusoidalPosEmb
 from utils import PAD_TOKEN,VOCAB_SIZE
 from typing import Union, Optional, Tuple
 
+
+class SrcLinearModel(nn.Module):
+    def __init__(self, input_dim, d_model):
+        super(SrcLinearModel, self).__init__()
+        # 假设最终想要的输出维度是 d_model
+        # 前 (input_dim-1) -> d_model/2
+        self.linear_left = nn.Linear(input_dim - 1, d_model // 2)
+        # 最后 1 -> d_model/2
+        self.linear_right = nn.Linear(1, d_model // 2)
+
+    def forward(self, src):
+        # src 的形状: (B, src_seq_len, input_dim)
+        # 取前面 (input_dim-1) 维:
+        left_part = src[:, :, :-1]  # shape: (B, src_seq_len, input_dim-1)
+        # 取最后 1 维，并保留其维度:
+        right_part = src[:, :, -1:].clone()  # shape: (B, src_seq_len, 1)
+
+        # 分别过线性映射
+        left_out = self.linear_left(left_part)  # shape: (B, src_seq_len, d_model/2)
+        right_out = self.linear_right(right_part)  # shape: (B, src_seq_len, d_model/2)
+
+        # 在最后一个维度拼接
+        out = torch.cat([left_out, right_out], dim=-1)  # shape: (B, src_seq_len, d_model)
+        return out
+
 class RubikSeq2SeqTransformer(nn.Module):
     """
     该模型用于学习从魔方状态序列到还原 move 序列的映射。
@@ -50,7 +75,7 @@ class RubikSeq2SeqTransformer(nn.Module):
 
 
         # Encoder：对魔方状态进行线性映射，然后加上位置编码
-        self.src_linear = nn.Linear(input_dim, d_model)
+        self.src_linear = SrcLinearModel(input_dim, d_model)
         self.src_pos_embedding = SinusoidalPosEmb(d_model)
         # self.src_pos_embedding = nn.Embedding(max_seq_len, d_model)
 
