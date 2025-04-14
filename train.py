@@ -301,11 +301,12 @@ def main():
     criterion = nn.CrossEntropyLoss(ignore_index=PAD_TOKEN)
     optimizer = model.configure_optimizers(learning_rate=config.train.learning_rate, weight_decay=config.train.weight_decay)
     # optimizer = optim.Adam(model.parameters(), lr=config.train.learning_rate, weight_decay=config.train.weight_decay)
-
+    eta_min = 1/3*config.train.learning_rate
     scheduler = LinearWarmupCosineAnnealingLR(
         optimizer,
         warmup_epochs=config.train.warmup_epochs,
-        max_epochs=config.train.max_epochs
+        max_epochs=config.train.max_epochs,
+        eta_min=eta_min
     )
 
     # 4. Training loop
@@ -421,6 +422,8 @@ def main_ddp():
     )
     model.apply(init_weights)  # 新增：应用 He 初始化
     model = model.to(device)
+    if dist.get_rank() == 0:
+        log_model(experiment, model=model, model_name="TheModel")
 
 
     # 3. Optimizer & Loss
@@ -428,10 +431,12 @@ def main_ddp():
     optimizer = model.configure_optimizers(learning_rate=config.train.learning_rate,weight_decay=config.train.weight_decay)
     # optimizer = optim.Adam(model.parameters(), lr=config.train.learning_rate, weight_decay=config.train.weight_decay)
 
+    eta_min = 1/3*config.train.learning_rate
     scheduler = LinearWarmupCosineAnnealingLR(
         optimizer,
         warmup_epochs=config.train.warmup_epochs,
-        max_epochs=config.train.max_epochs
+        max_epochs=config.train.max_epochs,
+        eta_min=eta_min
     )
 
     # 用 DDP 包装
