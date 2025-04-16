@@ -236,6 +236,7 @@ def main():
       project_name=config.comet.project_name,
       workspace=config.comet.workspace
     )
+    experiment.log_asset(file_name="models/model_history_transformer.py")
     # 记录所有超参数
     experiment.log_parameters(OmegaConf.to_container(config, resolve=True))
 
@@ -365,6 +366,8 @@ def main_ddp():
           workspace=config.comet.workspace
         )
         experiment.log_parameters(OmegaConf.to_container(config, resolve=True))
+        experiment.log_asset(file_name="models/model_history_transformer.py")
+        experiment.log_asset(file_name="dataset_rubik.py")
 
     # 1. Dataset & DataLoader
     train_dataset = RubikDataset(data_dir=config.data.train_dir,

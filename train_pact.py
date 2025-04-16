@@ -241,7 +241,6 @@ def main():
         nhead=config.model.nhead,
         num_layers=config.model.num_layers,
         max_seq_len=config.model.max_seq_len,
-        ff_dim=config.model.d_model * 4,  # 例如 feedforward = 4*d_model
         dropout=config.model.dropout,
         vocab_size=config.model.num_moves  # 假设要预测的动作数
     )

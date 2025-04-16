@@ -5,22 +5,49 @@ from models.positional_embedding import SinusoidalPosEmb
 from utils import PAD_TOKEN,VOCAB_SIZE
 from typing import Union, Optional, Tuple
 
+class SrcEmbedding(nn.Module):
+    def __init__(self, vocab_size, d_model, input_dim):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.project = nn.Sequential(
+            nn.Linear(d_model * input_dim, d_model),
+            nn.Mish(),
+        )
+
+    def forward(self, src):
+        """
+        src.shape == (B, seq, input_dim)
+        """
+        # (B, seq, input_dim, d_model)
+        x = self.embedding(src)
+
+        # 先把 input_dim 这一维合并到最后一个维度上 => (B, seq, input_dim*d_model)
+        B, seq, in_dim, d_model_ = x.shape
+        x = x.view(B, seq, in_dim * d_model_)
+
+        # 再投影回 (B, seq, d_model)
+        x = self.project(x)
+        return x
 
 class SrcLinearModel(nn.Module):
     def __init__(self, input_dim, d_model):
         super(SrcLinearModel, self).__init__()
         # 假设最终想要的输出维度是 d_model
         # 前 (input_dim-1) -> d_model/2
-        self.linear_left = nn.Linear(input_dim - 1, d_model // 2)
+        self.linear_left = nn.Linear(input_dim - 1, d_model)
         # 最后 1 -> d_model/2
-        self.linear_right = nn.Linear(1, d_model // 2)
+        self.linear_right = nn.Linear(1, d_model)
+        self.activation = nn.Sequential(
+            nn.Mish(),
+            nn.Linear(2 * d_model, d_model)
+        )
 
     def forward(self, src):
         # src 的形状: (B, src_seq_len, input_dim)
         # 取前面 (input_dim-1) 维:
-        left_part = src[:, :, :-1]  # shape: (B, src_seq_len, input_dim-1)
+        left_part = src[:, :, :-1].float()  # shape: (B, src_seq_len, input_dim-1)
         # 取最后 1 维，并保留其维度:
-        right_part = src[:, :, -1:].clone()  # shape: (B, src_seq_len, 1)
+        right_part = src[:, :, -1:].clone().float()  # shape: (B, src_seq_len, 1)
 
         # 分别过线性映射
         left_out = self.linear_left(left_part)  # shape: (B, src_seq_len, d_model/2)
@@ -28,6 +55,7 @@ class SrcLinearModel(nn.Module):
 
         # 在最后一个维度拼接
         out = torch.cat([left_out, right_out], dim=-1)  # shape: (B, src_seq_len, d_model)
+        out = self.activation(out)
         return out
 
 class RubikSeq2SeqTransformer(nn.Module):
@@ -46,7 +74,7 @@ class RubikSeq2SeqTransformer(nn.Module):
                  input_dim=55,
                  d_model=128,
                  nhead=4,
-                 num_layers=12,
+                 num_layers=6,
                  num_moves=VOCAB_SIZE,
                  max_seq_len=50,
                  dropout = 0.3,
@@ -75,7 +103,8 @@ class RubikSeq2SeqTransformer(nn.Module):
 
 
         # Encoder：对魔方状态进行线性映射，然后加上位置编码
-        self.src_linear = SrcLinearModel(input_dim, d_model)
+        self.src_embedding = SrcEmbedding(num_moves, d_model,input_dim)
+        # self.src_embedding = SrcLinearModel(input_dim, d_model)
         self.src_pos_embedding = SinusoidalPosEmb(d_model)
         # self.src_pos_embedding = nn.Embedding(max_seq_len, d_model)
 
@@ -231,8 +260,8 @@ class RubikSeq2SeqTransformer(nn.Module):
         tgt_key_padding_mask = (tgt_input == PAD_TOKEN)
 
         # ------- Encoder 部分保持不变 -------
-        src = src.permute(1, 0, 2).float()  # => (src_seq_len, B, d_model)
-        src = self.src_linear(src)
+        src = src.permute(1, 0, 2).long()  # => (src_seq_len, B, d_model)
+        src = self.src_embedding(src)
         src_positions = torch.arange(src_seq_len, device=src.device).unsqueeze(1)
         src = src + self.src_pos_embedding(src_positions)
 
@@ -285,7 +314,21 @@ if __name__ == "__main__":
     num_moves = VOCAB_SIZE
 
     model = RubikSeq2SeqTransformer(input_dim=input_dim, num_moves=num_moves)
-    src = torch.randn(B, src_seq_len, input_dim)  # 假设的魔方状态输入
+    # state_dict = model.state_dict()
+    # 假设我们已选取了某层的 weight
+    # weight_matrix = state_dict['decoder.layers.0.self_attn.in_proj_weight'].cpu().numpy()
+
+    # import matplotlib.pyplot as plt
+    # import seaborn as sns
+    # plt.figure(figsize=(8, 6))
+    # sns.heatmap(weight_matrix, cmap='viridis')
+    # plt.title("Transformer Query Weight Matrix")
+    # plt.xlabel("输出维度")
+    # plt.ylabel("输入维度")
+    # plt.show()
+
+    src = torch.randint(0,22,(B, src_seq_len, input_dim))
+    # src = torch.randn(B, src_seq_len, input_dim)  # 假设的魔方状态输入
     tgt = torch.randint(0, num_moves, (B, tgt_seq_len))  # 假设的 move 序列（索引）
 
     logits = model(src, tgt)  # (B, tgt_seq_len, num_moves)
