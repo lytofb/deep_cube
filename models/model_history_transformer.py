@@ -81,6 +81,19 @@ class SrcEmbedding(nn.Module):
         x = self.project(x)
         return x
 
+class SrcLinearSimpleModel(nn.Module):
+    def __init__(self,input_dim,d_model):
+        super(SrcLinearSimpleModel, self).__init__()
+        self.linear_activation = nn.Sequential(
+            nn.Linear(input_dim, d_model),
+            nn.ReLU()
+        )
+
+    def forward(self,src):
+        src = src.float()
+        out = self.linear_activation(src)
+        return out
+
 class SrcLinearModel(nn.Module):
     def __init__(self, input_dim, d_model):
         super(SrcLinearModel, self).__init__()
@@ -155,8 +168,9 @@ class RubikSeq2SeqTransformer(nn.Module):
 
 
         # Encoder：对魔方状态进行线性映射，然后加上位置编码
-        self.src_embedding = SrcEmbedding(num_moves, d_model,input_dim)
+        # self.src_embedding = SrcEmbedding(num_moves, d_model,input_dim)
         # self.src_embedding = SrcLinearModel(input_dim, d_model)
+        self.src_embedding = SrcLinearSimpleModel(input_dim, d_model)
         self.src_pos_embedding = SinusoidalPosEmb(d_model)
         # self.src_pos_embedding = nn.Embedding(max_seq_len, d_model)
 
