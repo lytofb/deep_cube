@@ -5,6 +5,58 @@ from models.positional_embedding import SinusoidalPosEmb
 from utils import PAD_TOKEN,VOCAB_SIZE
 from typing import Union, Optional, Tuple
 
+class SrcEmbeddingSeparate(nn.Module):
+    def __init__(self, vocab_size, d_model, input_dim):
+        """
+        参数：
+          - vocab_size: 词表大小，用于nn.Embedding的输入
+          - d_model: 每个 token 的嵌入维度
+          - input_dim: 每个输入 token 的字段数（例如前 input_dim-1 个字段和最后 1 个字段分开激活）
+        """
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, d_model)
+        # 对于前 input_dim-1 部分（连续拼接后维度为 (input_dim-1)*d_model）进行投影和激活
+        self.project_first = nn.Sequential(
+            nn.Linear(d_model * (input_dim - 1), d_model),
+            nn.Mish(),  # 使用Mish激活，当然也可换成其他激活函数
+        )
+        # 对于最后1个字段（维度 d_model）采用单独的投影+激活
+        self.project_last = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.Mish(),  # 同样也可选择其他激活函数
+        )
+        # 融合两部分特征，再投影回 d_model 输出维度
+        self.fuse = nn.Linear(d_model * 2, d_model)
+
+    def forward(self, src):
+        """
+        src.shape == (B, seq, input_dim)
+        先进行embedding后得到 (B, seq, input_dim, d_model)
+        """
+        # (B, seq, input_dim, d_model)
+        x = self.embedding(src)
+        B, seq, in_dim, d_model_ = x.shape
+
+        # 按字段拆分：假设前 in_dim-1 和最后1字段分开处理
+        x_first = x[:, :, :in_dim - 1, :]   # (B, seq, in_dim-1, d_model)
+        x_last  = x[:, :, in_dim - 1:, :]     # (B, seq, 1, d_model)
+
+        # 将各部分的最后两个维度展平
+        # 前部分：将 (in_dim-1, d_model) flatten 成 ( (in_dim-1)*d_model )
+        x_first_flat = x_first.view(B, seq, (in_dim - 1) * d_model_)
+        # 后部分：将 (1, d_model) flatten 成 (d_model)
+        x_last_flat = x_last.view(B, seq, d_model_)
+
+        # 分别经过独立投影和激活
+        first_out = self.project_first(x_first_flat)  # (B, seq, d_model)
+        last_out  = self.project_last(x_last_flat)      # (B, seq, d_model)
+
+        # 连接：沿最后一维拼接 => (B, seq, 2*d_model)
+        combined = torch.cat([first_out, last_out], dim=-1)
+        # 融合得到最终输出： (B, seq, d_model)
+        out = self.fuse(combined)
+        return out
+
 class SrcEmbedding(nn.Module):
     def __init__(self, vocab_size, d_model, input_dim):
         super().__init__()

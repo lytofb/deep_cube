@@ -1,20 +1,21 @@
 # config.yaml
 data:
-  train_dir: "rubik_shards"
-  val_dir: "rubik_val_shards"
+  train_dir: "rubik_kociemba_500k"
+  val_dir: "rubik_val_kociemba_shards"
   num_samples: 1000
   max_history_len: 8
 train:
-  batch_size: 256
-  num_workers: 4
+  batch_size: 2048
+  num_workers: 8
   prefetch_factor: 4
-  learning_rate: 5e-5
+  learning_rate: 3e-4
   weight_decay: 1e-6
-  warmup_epochs: 20
-  max_epochs: 1000
+  warmup_epochs: 10
+  max_epochs: 300
+  early_stop_patience: 10
 model:
   input_dim: 55
-  d_model: 256
+  d_model: 768
   num_layers: 6
   nhead: 8
   num_moves: 22

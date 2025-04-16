@@ -312,6 +312,8 @@ def main():
 
     # 4. Training loop
     epochs = config.train.max_epochs
+    epochs_without_improvement = 0
+    early_stop_patience = config.train.early_stop_patience  # 可根据需要调整 patience，比如 5 个 epoch
     best_val_acc = 0.0  # 记录验证集准确率的最高值
 
     for epoch in range(1, epochs+1):
@@ -324,6 +326,19 @@ def main():
         val_acc = evaluate_seq2seq_accuracy(model, val_loader, device)
         print(f"[Validation] Epoch {epoch}, Val_Acc={val_acc:.4f}")
 
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            epochs_without_improvement = 0
+            torch.save(model.state_dict(), "rubik_model_best.pth")
+            print(f"当前准确率最好 ({val_acc:.4f})，已更新 rubik_model_best.pth")
+        else:
+            epochs_without_improvement += 1
+            print(f"没有改进。连续 {epochs_without_improvement} 个 epoch 无提升")
+
+        if epochs_without_improvement >= early_stop_patience:
+            print("早停条件满足，停止训练。")
+            break
+
         # 每 20 个 epoch 做一次验证
         if epoch % 20 == 0:
 
@@ -331,12 +346,6 @@ def main():
             ckpt_path = f"rubik_model_epoch{epoch}.pth"
             torch.save(model.state_dict(), ckpt_path)
             print(f"已保存模型到 {ckpt_path}")
-
-            # 如果比最优准确率更高，则更新 best 并另存一份
-            if val_acc > best_val_acc:
-                best_val_acc = val_acc
-                torch.save(model.state_dict(), "rubik_model_best.pth")
-                print(f"当前准确率最好 ({val_acc:.4f})，已更新 rubik_model_best.pth")
 
         experiment.log_metric("train_loss", avg_loss, step=epoch)
         experiment.log_metric("lr", current_lr, step=epoch)
@@ -447,6 +456,10 @@ def main_ddp():
 
     # 4. Training loop
     epochs = config.train.max_epochs
+    if dist.get_rank() == 0:
+        early_stop_patience = config.train.early_stop_patience  # 可根据需要调整 patience，比如 5 个 epoch
+        epochs_without_improvement = 0
+
     best_val_acc = 0.0
 
     for epoch in range(1, epochs + 1):
@@ -463,6 +476,19 @@ def main_ddp():
             val_acc = evaluate_seq2seq_accuracy(model, val_loader, device)
             print(f"[Validation] Epoch {epoch}, Val_Acc={val_acc:.4f}")
             # 请在 "if epoch % 10 == 0:" 的 pass 替换为以下内容
+
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                epochs_without_improvement = 0
+                torch.save(model.state_dict(), "rubik_model_best.pth")
+                print(f"当前准确率最好 ({val_acc:.4f})，已更新 rubik_model_best.pth")
+            else:
+                epochs_without_improvement += 1
+                print(f"没有改进。连续 {epochs_without_improvement} 个 epoch 无提升")
+
+            if epochs_without_improvement >= early_stop_patience:
+                print("早停条件满足，停止训练。")
+                break
 
             if epoch % 2 == 0:
                 print(f"===== Free Run Evaluate at Epoch {epoch} =====")
@@ -485,7 +511,6 @@ def main_ddp():
 
                 model.train()
 
-                # 请在这里帮我实现一下free run evaluate，并打印出预测的token都是什么
             # 每 20 个 epoch 做一次验证
             if epoch % 20 == 0:
 
@@ -493,12 +518,6 @@ def main_ddp():
                 ckpt_path = f"rubik_model_epoch{epoch}.pth"
                 torch.save(model.state_dict(), ckpt_path)
                 print(f"已保存模型到 {ckpt_path}")
-
-                # 如果比最优准确率更高，则更新 best 并另存一份
-                if val_acc > best_val_acc:
-                    best_val_acc = val_acc
-                    torch.save(model.state_dict(), "rubik_model_best.pth")
-                    print(f"当前准确率最好 ({val_acc:.4f})，已更新 rubik_model_best.pth")
 
             experiment.log_metric("train_loss", avg_loss, step=epoch)
             experiment.log_metric("lr", current_lr, step=epoch)
