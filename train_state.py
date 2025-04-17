@@ -70,7 +70,7 @@ def collate_fn(batch):
     # 对 tgt_seq 进行 pad
     tgt_tensor = pad_sequence(tgt_seqs, batch_first=True, padding_value=PAD_TOKEN)
 
-    return src_tensor, init_state, tgt_tensor
+    return src_tensor, tgt_tensor, init_state
 
 def test_collate_fn():
     """
@@ -114,10 +114,11 @@ def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device):
     model.train()
     total_loss = 0.0
 
-    for src, tgt in tqdm(dataloader, desc="Training"):
+    for src, tgt, init_state in tqdm(dataloader, desc="Training"):
         # src: (B, src_seq_len, 55)，tgt: (B, tgt_seq_len)
         src = src.to(device, non_blocking=True)
         tgt = tgt.to(device, non_blocking=True)
+        init_state = init_state.to(device, non_blocking=True)
 
         optimizer.zero_grad()
 
@@ -127,7 +128,7 @@ def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device):
 
         # 使用混合后的输入进行前向传播，计算最终 loss
         with autocast(enabled=use_amp):
-            logits = model(src, decoder_input)  # (B, seq_len-1, num_moves)
+            logits = model(src, decoder_input,init_state)  # (B, seq_len-1, num_moves)
             loss = criterion(logits.view(-1, logits.size(-1)), target_output.contiguous().view(-1))
 
         scaler.scale(loss).backward()
@@ -159,9 +160,10 @@ def train_one_epoch_seq2seq_mix(model, dataloader, optimizer, criterion, device,
     # 设置 scheduled sampling 的概率（例如：前期主要用 teacher forcing，后期逐渐使用更多模型预测）
     sampling_prob = min(0.6, epoch / total_epochs * 0.5 + 0.3)
 
-    for src, tgt in tqdm(dataloader, desc=f"Training (epoch={epoch})"):
+    for src, tgt, init_state in tqdm(dataloader, desc=f"Training (epoch={epoch})"):
         src = src.to(device, non_blocking=True)
         tgt = tgt.to(device, non_blocking=True)
+        init_state = init_state.to(device, non_blocking=True)
 
         # 构造 teacher forcing 下的 decoder 输入与目标
         decoder_input = tgt[:, :-1].clone()   # (B, seq_len-1)
@@ -171,7 +173,7 @@ def train_one_epoch_seq2seq_mix(model, dataloader, optimizer, criterion, device,
 
         # 先做一次前向传播（不计算梯度），得到基于 teacher forcing 的预测，用于 token-level mixing
         with torch.no_grad():
-            teacher_logits = model(src, decoder_input)
+            teacher_logits = model(src, decoder_input, init_state)
             teacher_preds = teacher_logits.argmax(dim=-1)  # (B, seq_len-1)
 
         # 假设 teacher_preds 和 decoder_input 的 shape 都是 (B, tgt_seq_len - 1)
@@ -187,7 +189,7 @@ def train_one_epoch_seq2seq_mix(model, dataloader, optimizer, criterion, device,
 
         # 使用混合后的输入进行前向传播，计算最终 loss
         with autocast(enabled=use_amp):
-            logits = model(src, mixed_decoder_input)  # (B, seq_len-1, num_moves)
+            logits = model(src, mixed_decoder_input, init_state)  # (B, seq_len-1, num_moves)
             loss = criterion(logits.view(-1, logits.size(-1)), target_tokens.contiguous().view(-1))
 
         scaler.scale(loss).backward()
