@@ -151,11 +151,22 @@ class RubikActionSeq2SeqTransformer(nn.Module):
         self.tgt_emb_dropout = nn.Dropout(dropout)
 
         # 1.5) 对输入状态进行投影
+        # ====== __init__ ======
+        # ① 新增一行：魔方贴纸/状态的离散词表嵌入
+        self.state_token_embedding = nn.Embedding(
+            6,
+            d_model,
+        )
+
+        # ② 把 state_proj 的输入改成 d_model → d_model
         self.state_proj = nn.Sequential(
-            nn.Linear(54, d_model),
+            nn.Linear(d_model, d_model),
             nn.ReLU(),
             nn.Dropout(dropout)
         )
+
+        self.state_pool_q = nn.Parameter(torch.randn(1, 1, d_model))
+        self.state_attn = nn.MultiheadAttention(d_model, nhead=4, batch_first=True)
 
         # 2) 对 Encoder/Decoder 的输出增加 Dropout（原有的 dropout1 也可保留）
         self.dropout1 = nn.Dropout(dropout)
@@ -220,6 +231,11 @@ class RubikActionSeq2SeqTransformer(nn.Module):
         self.ln_f = nn.LayerNorm(d_model)
         # 输出层：将 Transformer 输出投影到 move 词汇表上
         self.fc_out = nn.Linear(d_model, num_moves)
+
+    def get_state_vec(self, state_emb):  # (B, 54, d_model)
+        q = self.state_pool_q.expand(state_emb.size(0), -1, -1)  # (B,1,d)
+        state_vec, _ = self.state_attn(q, state_emb, state_emb)  # → (B,1,d)
+        return state_vec.squeeze(1)  # (B,d)
 
     def get_optim_groups(self, weight_decay: float = 1e-3):
         """
@@ -318,14 +334,18 @@ class RubikActionSeq2SeqTransformer(nn.Module):
         tgt_key_padding_mask = (tgt_input == PAD_TOKEN)
 
         # ------- Encoder 部分保持不变 -------
-        src = src.permute(1, 0).long()  # => (src_seq_len, B)
+        src = src.permute(1, 0)  # => (src_seq_len, B)
         src = self.src_embedding(src)   # => (src_seq_len, B, d_model)
         src_positions = torch.arange(src_seq_len, device=src.device).unsqueeze(1)
         src = src + self.src_pos_embedding(src_positions)
 
         # 在 Encoder 输入阶段也加个 Dropout
         src = self.src_emb_dropout(src)
-        state_bias = self.state_proj(init_state).unsqueeze(1).permute(1, 0 ,2)  # (B, 1, d_model)
+        state_emb = self.state_token_embedding(init_state.long())  # (B, 54, d_model)
+        state_vec = self.get_state_vec(state_emb)  # (B, d_model)
+        state_bias = self.state_proj(state_vec) \
+            .unsqueeze(1) \
+            .permute(1, 0, 2)  # (B, 1, d_model)
         memory = self.encoder(src) + state_bias
 
         # ------- Decoder Embedding -------
