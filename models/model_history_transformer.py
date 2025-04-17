@@ -14,7 +14,7 @@ class SrcEmbeddingSeparate(nn.Module):
           - input_dim: 每个输入 token 的字段数（例如前 input_dim-1 个字段和最后 1 个字段分开激活）
         """
         super().__init__()
-        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.embedding = nn.Embedding(vocab_size, d_model, padding_idx=PAD_TOKEN)
         # 对于前 input_dim-1 部分（连续拼接后维度为 (input_dim-1)*d_model）进行投影和激活
         self.project_first = nn.Sequential(
             nn.Linear(d_model * (input_dim - 1), d_model),
@@ -60,7 +60,7 @@ class SrcEmbeddingSeparate(nn.Module):
 class SrcEmbedding(nn.Module):
     def __init__(self, vocab_size, d_model, input_dim):
         super().__init__()
-        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.embedding = nn.Embedding(vocab_size, d_model, padding_idx=PAD_TOKEN)
         self.project = nn.Sequential(
             nn.Linear(d_model * input_dim, d_model),
             nn.Mish(),
