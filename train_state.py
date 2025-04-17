@@ -94,7 +94,42 @@ def test_collate_fn():
     batch = [(src_seq1, tgt_seq1), (src_seq2, tgt_seq2)]
 
     # 调用 collate_fn
-    src_tensor, init_state, tgt_tensor = collate_fn(batch)
+    src_tensor, tgt_tensor, init_state = collate_fn(batch)
+
+    # 1. 超参
+    B            = 2       # batch size
+    src_seq_len  = 10      # 你的 src 序列长度 (history_len+1)
+    max_tgt_len  = 7       # 你的 tgt_input 最大长度
+    input_dim    = 55      # src 每条记录的维度
+    d_model      = 128
+    nhead        = 4
+    num_layers   = 2
+    num_moves    = 22      # vocab_size / num_moves
+    dropout      = 0.1
+
+    # 2. 实例化模型
+    model = RubikActionSeq2SeqTransformer(
+        num_layers=num_layers,
+        d_model=d_model,
+        input_dim=input_dim,
+        nhead=nhead,
+        num_moves=num_moves,
+        max_seq_len=src_seq_len,
+        dropout=dropout
+    )
+    model.eval()
+
+    # # 3. 构造假数据
+    # # src: 前面 collate_fn 输出的 src_tensor，shape = (B, src_seq_len)
+    # src = torch.randint(0, num_moves, (B, src_seq_len), dtype=torch.long)
+    # # init_state: collate_fn 输出的 init_state，shape = (B, input_dim-1)
+    # init_state = torch.randn(B, input_dim - 1)
+    # # tgt_input: padding 后的 tgt_seq，shape = (B, max_tgt_len)
+    # tgt_input = torch.randint(0, num_moves, (B, max_tgt_len), dtype=torch.long)
+
+    # 4. 调用 forward
+    with torch.no_grad():
+        out = model(src_tensor, tgt_tensor, init_state)
 
     # 输出各部分的形状和内容，便于验证
     print("src_tensor shape:", src_tensor.shape)  # 期望 (2, 4)
