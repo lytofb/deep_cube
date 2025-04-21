@@ -166,7 +166,7 @@ class RubikActionSeq2SeqTransformer(nn.Module):
         )
 
         self.state_pool_q = nn.Parameter(torch.randn(1, 1, d_model))
-        self.state_attn = nn.MultiheadAttention(d_model, nhead=4, batch_first=True)
+        self.state_attn = nn.MultiheadAttention(d_model, num_heads=4, batch_first=True)
 
         # 2) 对 Encoder/Decoder 的输出增加 Dropout（原有的 dropout1 也可保留）
         self.dropout1 = nn.Dropout(dropout)
@@ -268,6 +268,7 @@ class RubikActionSeq2SeqTransformer(nn.Module):
                     no_decay.add(fpn)
 
         # special case the position embedding parameter in the root GPT module as not decayed
+        no_decay.add("state_pool_q")
         # no_decay.add("pos_emb")
         # no_decay.add("_dummy_variable")
         # if self.cond_pos_emb is not None:
