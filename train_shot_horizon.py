@@ -113,12 +113,30 @@ def train_one_epoch_seq2seq_mix(model, dataloader, optimizer, criterion, device,
         # 在 teacher_preds 前面加一个 dummy（这里用 PAD_TOKEN 表示，你也可以用其他合适的值）
         dummy = torch.full((teacher_preds.size(0), 1), PAD_TOKEN, dtype=teacher_preds.dtype,
                            device=teacher_preds.device)
-        # 拼接 dummy 并去掉 teacher_preds 的最后一个 token，得到新的 teacher_preds_mod，其 shape 为 (B, tgt_seq_len - 1)
+        # 原有的 teacher_preds_mod 构造
         teacher_preds_mod = torch.cat([dummy, teacher_preds[:, :-1]], dim=1)
-        # 对 decoder 输入的每个 token（除第一个 token 外）随机决定是否替换为模型预测
-        mix_mask = (torch.rand(decoder_input.shape, device=device) < sampling_prob)
-        mix_mask[:, 0] = False  # 保持 SOS token 不变
-        mixed_decoder_input = torch.where(mix_mask, teacher_preds_mod, decoder_input)
+
+        # 计算长度
+        L_mod = teacher_preds_mod.size(1)
+        L_dec = decoder_input.size(1)
+        common_len = min(L_mod, L_dec)
+
+        # 只对公共部分生成 mask（保持 SOS 不变）
+        mix_mask = (torch.rand((decoder_input.size(0), common_len), device=device) < sampling_prob)
+        mix_mask[:, 0] = False  # SOS token 不替换
+
+        # 在公共部分依据 mask 做替换
+        mixed_common = torch.where(
+            mix_mask,
+            teacher_preds_mod[:, :common_len],
+            decoder_input[:, :common_len]
+        )
+
+        # 将剩余的 decoder_input 部分拼接上
+        if L_dec > common_len:
+            mixed_decoder_input = torch.cat([mixed_common, decoder_input[:, common_len:]], dim=1)
+        else:
+            mixed_decoder_input = mixed_common
 
         # 使用混合后的输入进行前向传播，计算最终 loss
         with autocast(enabled=use_amp):
