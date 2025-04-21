@@ -24,7 +24,7 @@ import os
 import torch.nn.init as init
 
 
-from dataset_rubik import RubikDataset
+from dataset_rubik import RubikDataset, collate_fn
 from models.model_history_transformer import RubikSeq2SeqTransformer
 
 from utilsp.linear_warmup_cosine_annealing_lr import LinearWarmupCosineAnnealingLR
@@ -37,108 +37,6 @@ config = OmegaConf.load("config.yaml")
 scaler = GradScaler()
 use_amp = config.train.get("use_amp", True)
 
-def collate_fn(batch):
-    """
-    batch: list of (src_seq, tgt_seq)
-      - src_seq.shape = (history_len+1, 55)
-      - tgt_seq: 1D tensor of token indices, 长度可能不同
-    返回 (src_tensor, init_state, tgt_tensor)，三元组
-      - src_tensor: 取 src_seq[:, -1] => shape (B, history_len+1)
-      - init_state: 取 src_seq[0, :-1] => shape (B, 54)
-      - tgt_tensor: 对 tgt_seq 做 padding 后的张量 => shape (B, max_len)
-    """
-    src_seqs = [x[0] for x in batch]
-    tgt_seqs = [x[1] for x in batch]
-
-    src_tensor_list = []
-    init_state_list = []
-
-    for src_seq in src_seqs:
-        # src_seq.shape = (history_len+1, 55)
-        # src_seq[:, -1] => shape (history_len+1,)
-        # src_seq[0, :-1] => shape (54,)
-
-        s_t = src_seq[:, -1]   # 最后一列（动作等）
-        i_s = src_seq[0, :-1]  # 第一行，去掉最后一列（初始状态）
-        src_tensor_list.append(s_t)
-        init_state_list.append(i_s)
-
-    # 将每个样本的 src_tensor / init_state 叠加到 batch 维度
-    src_tensor  = torch.stack(src_tensor_list, dim=0)  # (B, history_len+1)
-    init_state  = torch.stack(init_state_list, dim=0)  # (B, 54)
-
-    # 对 tgt_seq 进行 pad
-    tgt_tensor = pad_sequence(tgt_seqs, batch_first=True, padding_value=PAD_TOKEN)
-
-    return src_tensor, tgt_tensor, init_state
-
-def test_collate_fn():
-    """
-    构造一个包含2个样本的batch，每个样本：
-      - src_seq: (history_len+1, 55) 这里假设 history_len=3，则 shape=(4,55)
-      - tgt_seq: 长度不同的1D tensor
-    """
-    # 构造两个示例：
-    history_len = 3  # 则 src_seq 的行数 = 4
-    # 示例1：构造一个 (4,55) 的 src_seq，数据采用连续编号，便于验证
-    src_seq1 = torch.arange(0, (history_len + 1) * 55).view(history_len + 1, 55)
-    # tgt_seq1 为 4个 token 的 tensor
-    tgt_seq1 = torch.tensor([1, 2, 3, 4], dtype=torch.long)
-
-    # 示例2：构造另一个 (4,55) 的 src_seq，数据编号从 (history_len+1)*55 开始
-    src_seq2 = torch.arange((history_len + 1) * 55, 2 * (history_len + 1) * 55).view(history_len + 1, 55)
-    # tgt_seq2 长度不同，比如 3个 token
-    tgt_seq2 = torch.tensor([5, 6, 7], dtype=torch.long)
-
-    # 构造 batch
-    batch = [(src_seq1, tgt_seq1), (src_seq2, tgt_seq2)]
-
-    # 调用 collate_fn
-    src_tensor, tgt_tensor, init_state = collate_fn(batch)
-
-    # 1. 超参
-    B            = 2       # batch size
-    src_seq_len  = 10      # 你的 src 序列长度 (history_len+1)
-    max_tgt_len  = 7       # 你的 tgt_input 最大长度
-    input_dim    = 55      # src 每条记录的维度
-    d_model      = 128
-    nhead        = 4
-    num_layers   = 2
-    num_moves    = 22      # vocab_size / num_moves
-    dropout      = 0.1
-
-    # 2. 实例化模型
-    model = RubikShortHorizonSeq2SeqTransformer(
-        num_layers=num_layers,
-        d_model=d_model,
-        input_dim=input_dim,
-        nhead=nhead,
-        num_moves=num_moves,
-        max_seq_len=src_seq_len,
-        dropout=dropout
-    )
-    model.eval()
-
-    # # 3. 构造假数据
-    # # src: 前面 collate_fn 输出的 src_tensor，shape = (B, src_seq_len)
-    # src = torch.randint(0, num_moves, (B, src_seq_len), dtype=torch.long)
-    # # init_state: collate_fn 输出的 init_state，shape = (B, input_dim-1)
-    # init_state = torch.randn(B, input_dim - 1)
-    # # tgt_input: padding 后的 tgt_seq，shape = (B, max_tgt_len)
-    # tgt_input = torch.randint(0, num_moves, (B, max_tgt_len), dtype=torch.long)
-
-    # 4. 调用 forward
-    with torch.no_grad():
-        out = model(src_tensor, tgt_tensor)
-
-    # 输出各部分的形状和内容，便于验证
-    print("src_tensor shape:", src_tensor.shape)  # 期望 (2, 4)
-    print("src_tensor:", src_tensor)
-    print("init_state shape:", init_state.shape)  # 期望 (2, 54)
-    print("init_state:", init_state)
-    print("tgt_tensor shape:", tgt_tensor.shape)  # 期望 (2, max_length) 这里 max_length=4，因为示例1长度4
-    print("tgt_tensor:", tgt_tensor)
-
 def init_weights(m):
     if isinstance(m, nn.Linear):
         init.kaiming_uniform_(m.weight, nonlinearity='relu')
@@ -149,11 +47,10 @@ def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device):
     model.train()
     total_loss = 0.0
 
-    for src, tgt, init_state in tqdm(dataloader, desc="Training"):
+    for src, tgt in tqdm(dataloader, desc="Training"):
         # src: (B, src_seq_len, 55)，tgt: (B, tgt_seq_len)
         src = src.to(device, non_blocking=True)
         tgt = tgt.to(device, non_blocking=True)
-        init_state = init_state.to(device, non_blocking=True)
 
         optimizer.zero_grad()
 
@@ -163,7 +60,7 @@ def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device):
 
         # 使用混合后的输入进行前向传播，计算最终 loss
         with autocast(enabled=use_amp):
-            logits = model(src, decoder_input,init_state)  # (B, seq_len-1, num_moves)
+            logits = model(src, decoder_input)  # (B, seq_len-1, num_moves)
             loss = criterion(logits.view(-1, logits.size(-1)), target_output.contiguous().view(-1))
 
         scaler.scale(loss).backward()
@@ -195,20 +92,21 @@ def train_one_epoch_seq2seq_mix(model, dataloader, optimizer, criterion, device,
     # 设置 scheduled sampling 的概率（例如：前期主要用 teacher forcing，后期逐渐使用更多模型预测）
     sampling_prob = min(0.6, epoch / total_epochs * 0.5 + 0.3)
 
-    for src, tgt, init_state in tqdm(dataloader, desc=f"Training (epoch={epoch})"):
+    tgt_seq_len = 5
+    for src, tgt in tqdm(dataloader, desc=f"Training (epoch={epoch})"):
         src = src.to(device, non_blocking=True)
         tgt = tgt.to(device, non_blocking=True)
-        init_state = init_state.to(device, non_blocking=True)
 
         # 构造 teacher forcing 下的 decoder 输入与目标
         decoder_input = tgt[:, :-1].clone()   # (B, seq_len-1)
         target_tokens = tgt[:, 1:].clone()      # (B, seq_len-1)
+        target_tokens = target_tokens[:, :tgt_seq_len]
 
         optimizer.zero_grad()
 
         # 先做一次前向传播（不计算梯度），得到基于 teacher forcing 的预测，用于 token-level mixing
         with torch.no_grad():
-            teacher_logits = model(src, decoder_input, init_state)
+            teacher_logits = model(src, decoder_input)
             teacher_preds = teacher_logits.argmax(dim=-1)  # (B, seq_len-1)
 
         # 假设 teacher_preds 和 decoder_input 的 shape 都是 (B, tgt_seq_len - 1)
@@ -224,7 +122,7 @@ def train_one_epoch_seq2seq_mix(model, dataloader, optimizer, criterion, device,
 
         # 使用混合后的输入进行前向传播，计算最终 loss
         with autocast(enabled=use_amp):
-            logits = model(src, mixed_decoder_input, init_state)  # (B, seq_len-1, num_moves)
+            logits = model(src, mixed_decoder_input)  # (B, seq_len-1, num_moves)
             loss = criterion(logits.view(-1, logits.size(-1)), target_tokens.contiguous().view(-1))
 
         scaler.scale(loss).backward()
@@ -252,6 +150,7 @@ def evaluate_seq2seq_accuracy(model, dataloader, device):
     total_correct = 0
     total_count = 0
 
+    tgt_seq_len = 5
     for src, tgt in dataloader:
         src = src.to(device)
         tgt = tgt.to(device)
@@ -259,6 +158,7 @@ def evaluate_seq2seq_accuracy(model, dataloader, device):
         # 同训练方式 (Teacher forcing)
         decoder_input = tgt[:, :-1]
         target_output = tgt[:, 1:]  # 形状 (B, seq_len-1)
+        target_output = target_output[:,:tgt_seq_len]
 
         logits = model(src, decoder_input)  # => (B, seq_len-1, num_moves)
         # 取 argmax => (B, seq_len-1)

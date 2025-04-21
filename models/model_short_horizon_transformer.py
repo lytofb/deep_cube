@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 from models.positional_embedding import SinusoidalPosEmb
-from utils import PAD_TOKEN,VOCAB_SIZE
+from utils import PAD_TOKEN, VOCAB_SIZE, MASK_OR_NOMOVE_TOKEN
 from typing import Union, Optional, Tuple
 
 class SrcEmbeddingSeparate(nn.Module):
@@ -321,7 +321,7 @@ class RubikShortHorizonSeq2SeqTransformer(nn.Module):
             tgt_input: shape (B, tgt_seq_len-1)  # 训练循环外部已经截断好
         """
         src = src[:,self.src_seq_len*(-1):,:]
-        tgt_input = tgt_input[:,:self.tgt_seq_len,:]
+        tgt_input = tgt_input[:,:self.tgt_seq_len]
         B, src_seq_len, _ = src.shape
         B, tgt_seq_len_minus1 = tgt_input.shape
 
@@ -329,6 +329,7 @@ class RubikShortHorizonSeq2SeqTransformer(nn.Module):
         # 如果你的设计里, src[..., -1] 存放的是 token 索引，则下面这样判断
         # 否则要根据你的实际数据格式改写
         src_tokens = src[..., -1].long()           # (B, src_seq_len)
+        src_tokens[:, 0] = MASK_OR_NOMOVE_TOKEN
         src_key_padding_mask = (src_tokens == PAD_TOKEN)  # True 表示 padding，需要屏蔽
         tgt_key_padding_mask = (tgt_input == PAD_TOKEN)
 
