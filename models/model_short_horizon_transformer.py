@@ -329,7 +329,16 @@ class RubikShortHorizonSeq2SeqTransformer(nn.Module):
         # 如果你的设计里, src[..., -1] 存放的是 token 索引，则下面这样判断
         # 否则要根据你的实际数据格式改写
         src_tokens = src[..., -1].long()           # (B, src_seq_len)
-        src_tokens[:, 0] = MASK_OR_NOMOVE_TOKEN
+        # 1. 先构造一个 mask，标记哪些位置不是 PAD
+        nonpad = (src_tokens != PAD_TOKEN)  # (B, L)  BoolTensor
+
+        # 2. nonpad.float().argmax(dim=1) 会返回每行第一次出现 True 的下标
+        first_nonpad_idx = nonpad.float().argmax(dim=1)  # (B,)
+
+        # 3. 批量索引，然后赋值
+        batch_idx = torch.arange(src_tokens.size(0), device=src_tokens.device)  # (B,)
+        src_tokens[batch_idx, first_nonpad_idx] = MASK_OR_NOMOVE_TOKEN
+
         src_key_padding_mask = (src_tokens == PAD_TOKEN)  # True 表示 padding，需要屏蔽
         tgt_key_padding_mask = (tgt_input == PAD_TOKEN)
 
