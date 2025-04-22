@@ -123,7 +123,7 @@ class SrcLinearModel(nn.Module):
         out = self.activation(out)
         return out
 
-class RubikSeq2SeqTransformer(nn.Module):
+class RubikEncoderOnly(nn.Module):
     """
     该模型用于学习从魔方状态序列到还原 move 序列的映射。
 
@@ -159,6 +159,8 @@ class RubikSeq2SeqTransformer(nn.Module):
         self.num_moves = num_moves
         self.max_seq_len = max_seq_len
 
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
+
         # 1) 在输入 Embedding 上增加 Dropout
         self.src_emb_dropout = nn.Dropout(dropout)
         self.tgt_emb_dropout = nn.Dropout(dropout)
@@ -179,40 +181,40 @@ class RubikSeq2SeqTransformer(nn.Module):
         self.tgt_pos_embedding = SinusoidalPosEmb(d_model)
         # self.tgt_pos_embedding = nn.Embedding(max_seq_len, d_model)
 
-        # encoder_layer = nn.TransformerEncoderLayer(
-        #     d_model=d_model,
-        #     nhead=nhead,
-        #     dim_feedforward=4 * d_model,
-        #     dropout=dropout,
-        #     activation='gelu',
-        #     batch_first=False,
-        #     norm_first=True
-        # )
-        # self.encoder = nn.TransformerEncoder(
-        #     encoder_layer=encoder_layer,
-        #     num_layers=num_layers
-        # )
-
-        self.encoder = nn.Sequential(
-            nn.Linear(d_model, 4 * d_model),
-            nn.Mish(),
-            nn.Linear(4 * d_model, d_model)
-        )
-
-        # decoder
-        decoder_layer = nn.TransformerDecoderLayer(
+        encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
             dim_feedforward=4 * d_model,
             dropout=dropout,
             activation='gelu',
             batch_first=False,
-            norm_first=True  # important for stability
+            norm_first=True
         )
-        self.decoder = nn.TransformerDecoder(
-            decoder_layer=decoder_layer,
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer=encoder_layer,
             num_layers=num_layers
         )
+
+        # self.encoder = nn.Sequential(
+        #     nn.Linear(d_model, 4 * d_model),
+        #     nn.Mish(),
+        #     nn.Linear(4 * d_model, d_model)
+        # )
+
+        # decoder
+        # decoder_layer = nn.TransformerDecoderLayer(
+        #     d_model=d_model,
+        #     nhead=nhead,
+        #     dim_feedforward=4 * d_model,
+        #     dropout=dropout,
+        #     activation='gelu',
+        #     batch_first=False,
+        #     norm_first=True  # important for stability
+        # )
+        # self.decoder = nn.TransformerDecoder(
+        #     decoder_layer=decoder_layer,
+        #     num_layers=num_layers
+        # )
 
         # Transformer 模型（包含 Encoder 和 Decoder）
         # self.transformer = nn.Transformer(
@@ -309,65 +311,43 @@ class RubikSeq2SeqTransformer(nn.Module):
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
         return mask
 
-    def forward(self, src, tgt_input):
+    def forward(self, src):
         """
         Args:
             src:       shape (B, src_seq_len, input_dim)
-            tgt_input: shape (B, tgt_seq_len-1)  # 训练循环外部已经截断好
         """
         B, src_seq_len, _ = src.shape
-        B, tgt_seq_len_minus1 = tgt_input.shape
 
         # =========== 构建 Key Padding Mask ===========
         # 如果你的设计里, src[..., -1] 存放的是 token 索引，则下面这样判断
         # 否则要根据你的实际数据格式改写
         src_tokens = src[..., -1].long()           # (B, src_seq_len)
         src_key_padding_mask = (src_tokens == PAD_TOKEN)  # True 表示 padding，需要屏蔽
-        tgt_key_padding_mask = (tgt_input == PAD_TOKEN)
 
         # ------- Encoder 部分保持不变 -------
         src = src.permute(1, 0, 2).long()  # => (src_seq_len, B, d_model)
         src = self.src_embedding(src)
-        src_positions = torch.arange(src_seq_len, device=src.device).unsqueeze(1)
+        # ---------- 插入 CLS token ----------
+        cls_tok = self.cls_token.expand(1, B, -1)            # (1, B, d_model)
+        src = torch.cat([cls_tok, src], dim=0)               # (L+1, B, d_model)
+        src_positions = torch.arange(src.shape[0], device=src.device).unsqueeze(1)
         src = src + self.src_pos_embedding(src_positions)
 
         # 在 Encoder 输入阶段也加个 Dropout
         src = self.src_emb_dropout(src)
-        memory = self.encoder(src)
 
-        # ------- Decoder Embedding -------
-        tgt_input = tgt_input.permute(1, 0)  # => (tgt_seq_len-1, B)
-        tgt_emb = self.tgt_embedding(tgt_input)
-        tgt_positions = torch.arange(tgt_emb.size(0), device=tgt_emb.device).unsqueeze(1)
-        tgt_emb = tgt_emb + self.tgt_pos_embedding(tgt_positions)
+        # ---------- 扩展 padding mask：给 CLS 位置补 False ----------
+        cls_pad = torch.zeros((B, 1), dtype=torch.bool, device=src.device)    # (B, 1)
+        src_key_padding_mask = torch.cat([cls_pad, src_key_padding_mask], dim=1)  # (B, L+1)
 
-        # 在 Decoder 输入阶段也加个 Dropout
-        tgt_emb = self.tgt_emb_dropout(tgt_emb)
+        out = self.encoder(src,src_key_padding_mask = src_key_padding_mask)
 
-
-        # ------- Causal Mask -------
-        tgt_mask = self.generate_square_subsequent_mask(tgt_emb.size(0)).to(tgt_emb.device)
-        out = self.decoder(
-            tgt=tgt_emb,
-            memory=memory,
-            tgt_mask=tgt_mask,
-            memory_key_padding_mask=src_key_padding_mask,
-            tgt_key_padding_mask=tgt_key_padding_mask
-        )
-
-        # ------- Transformer -------
-        # out = self.transformer(
-        #     src=src,
-        #     tgt=tgt_emb,
-        #     tgt_mask=tgt_mask,
-        #     src_key_padding_mask=src_key_padding_mask,  # 屏蔽Encoder端PAD
-        #     tgt_key_padding_mask=tgt_key_padding_mask,
-        #     tgt_is_causal=True
-        # )
-        out = out.permute(1, 0, 2)  # => (B, tgt_seq_len-1, d_model)
-        # out = self.dropout1(out)
+        out = out.permute(1, 0, 2)  # => (B, src_seq_len, d_model)
         out = self.ln_f(out)
-        logits = self.fc_out(out)  # => (B, tgt_seq_len-1, num_moves)
+        h_cls = out[:, 0, :]                  # (B, d_model) —— CLS 位置
+
+        # ---------- 预测下一步动作 ----------
+        logits = self.fc_out(h_cls)           # (B, num_moves)
         return logits
 
 
@@ -379,7 +359,7 @@ if __name__ == "__main__":
     input_dim = 55
     num_moves = VOCAB_SIZE
 
-    model = RubikSeq2SeqTransformer(input_dim=input_dim, num_moves=num_moves)
+    model = RubikEncoderOnly(input_dim=input_dim, num_moves=num_moves)
     # state_dict = model.state_dict()
     # 假设我们已选取了某层的 weight
     # weight_matrix = state_dict['decoder.layers.0.self_attn.in_proj_weight'].cpu().numpy()
@@ -394,8 +374,6 @@ if __name__ == "__main__":
     # plt.show()
 
     src = torch.randint(0,22,(B, src_seq_len, input_dim))
-    # src = torch.randn(B, src_seq_len, input_dim)  # 假设的魔方状态输入
-    tgt = torch.randint(0, num_moves, (B, tgt_seq_len))  # 假设的 move 序列（索引）
 
-    logits = model(src, tgt)  # (B, tgt_seq_len, num_moves)
+    logits = model(src)  # (B, tgt_seq_len, num_moves)
     print(logits.shape)
