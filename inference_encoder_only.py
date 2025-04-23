@@ -541,7 +541,7 @@ def main():
     # print("==============evaluate_seq2seq_accuracy_with_repetition_penalty==============")
     # evaluate_seq2seq_accuracy_with_repetition_penalty(model, val_loader, device)
     print("==============evaluate_free_run_success_rate==============")
-    evaluate_free_run_success_rate(model, val_loader,sample_count=1000)
+    evaluate_free_run_success_rate(model, val_loader, device, sample_count=1000)
     # print("==============evaluate_seq2seq_accuracy_with_repetition_penalty_top_p==============")
     # evaluate_seq2seq_accuracy_with_repetition_penalty_top_p(model, val_loader, device, p=0.9)
     print(f"[Validation], Val_Acc={val_acc:.4f}")
