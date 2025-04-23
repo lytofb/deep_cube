@@ -270,6 +270,7 @@ def evaluate_free_run_success_rate(
     model.eval()
     successes = 0
     seen = 0
+    diff_start_counts = {}
 
     for src_batch, tgt_batch in dataloader:
         batch_size = src_batch.size(0)
@@ -316,15 +317,22 @@ def evaluate_free_run_success_rate(
 
             # —— 判断是否成功 —— #
             # 只有当 decoded 在 [0:cutoff] 完全与 gt 在 [0:cutoff] 一致，才算成功
+            # 判断成功与否，并统计首次出错位置
             if decoded[:cutoff] == gt[:cutoff]:
                 successes += 1
+            else:
+                for j in range(cutoff):
+                    if j >= len(decoded) or decoded[j] != gt[j]:
+                        diff_start_counts[j] = diff_start_counts.get(j, 0) + 1
+                        break
 
             seen += 1
 
         if seen >= sample_count:
             break
 
-    return successes / sample_count if sample_count > 0 else 0.0
+    success_rate = successes / sample_count if sample_count > 0 else 0.0
+    return success_rate, diff_start_counts
 
 @torch.no_grad()
 def evaluate_seq2seq_accuracy_with_repetition_penalty_top_p(
@@ -541,7 +549,10 @@ def main():
     # print("==============evaluate_seq2seq_accuracy_with_repetition_penalty==============")
     # evaluate_seq2seq_accuracy_with_repetition_penalty(model, val_loader, device)
     print("==============evaluate_free_run_success_rate==============")
-    evaluate_free_run_success_rate(model, val_loader, device, sample_count=1000)
+    success_rate, diff_start_counts = evaluate_free_run_success_rate(model, val_loader, device, sample_count=1000)
+    print("========")
+    print(success_rate)
+    print(diff_start_counts)
     # print("==============evaluate_seq2seq_accuracy_with_repetition_penalty_top_p==============")
     # evaluate_seq2seq_accuracy_with_repetition_penalty_top_p(model, val_loader, device, p=0.9)
     print(f"[Validation], Val_Acc={val_acc:.4f}")
