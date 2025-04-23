@@ -252,6 +252,81 @@ def evaluate_seq2seq_accuracy_with_repetition_penalty(model, dataloader, device,
     return total_correct / total_count
 
 @torch.no_grad()
+def evaluate_free_run_success_rate(
+    model,
+    dataloader,
+    device,
+    history_len: int = 8,
+    max_len: int = 50,
+    sample_count: int = 5,
+):
+    """
+    对 dataloader 中的样本做 free-run 解码，总共取 sample_count 个样本，
+    当预测序列与 ground truth 在遇到第一个值为 19 的位置之前完全一致时，视为一次成功。
+
+    返回:
+      success_rate (float): 成功样本数 / sample_count
+    """
+    model.eval()
+    successes = 0
+    seen = 0
+
+    for src_batch, tgt_batch in dataloader:
+        batch_size = src_batch.size(0)
+        for i in range(batch_size):
+            if seen >= sample_count:
+                break
+
+            # —— 准备单样本 —— #
+            sample_src = src_batch[i].unsqueeze(0).to(device)   # (1, seq_len, feat_dim)
+            sample_tgt = tgt_batch[i].cpu().tolist()            # 包含 SOS_TOKEN
+
+            # 跳过第一个 SOS，得到 ground truth 序列
+            gt = sample_tgt[1:]
+
+            # 找到 ground truth 中第一次出现 19 的位置（不包含该值本身）
+            try:
+                cutoff = gt.index(19)
+            except ValueError:
+                cutoff = len(gt)
+
+            # —— free-run 解码 —— #
+            # 初始化 steps 列表：[(state_tensor, move_id), ...]
+            # 假设 state 保存在 src 序列的最后一项的前 54 维中
+            init_state = sample_src[0, -1, :54]
+            steps = [(init_state, None)]
+            decoded = []
+
+            for t in range(max_len):
+                # 构建最近 history_len 步的模型输入
+                inp = build_src_tensor_from_steps(steps, history_len=history_len)  # (1, history_len+1, feat_dim)
+                inp = inp.to(device)
+
+                # 直接调用模型，得到 (1, num_moves) 的 logits
+                logits = model(inp).squeeze(0)  # (num_moves,)
+                # 贪心选最大 logit，对应的 token
+                tok = int(logits.argmax().item())
+                if tok in (EOS_TOKEN, PAD_TOKEN):
+                    break
+
+                decoded.append(tok)
+                # 更新状态——假如你已有状态更新函数
+                new_state = update_state(steps[-1][0], tok)
+                steps.append((new_state, tok))
+
+            # —— 判断是否成功 —— #
+            # 只有当 decoded 在 [0:cutoff] 完全与 gt 在 [0:cutoff] 一致，才算成功
+            if decoded[:cutoff] == gt[:cutoff]:
+                successes += 1
+
+            seen += 1
+
+        if seen >= sample_count:
+            break
+
+    return successes / sample_count if sample_count > 0 else 0.0
+
+@torch.no_grad()
 def evaluate_seq2seq_accuracy_with_repetition_penalty_top_p(
         model, dataloader, device, history_len=8, max_len=50, p=0.9
 ):
@@ -446,7 +521,7 @@ def main():
     val_loader = DataLoader(
         val_dataset,
         batch_size=config.train.batch_size,
-        shuffle=False,
+        shuffle=True,
         collate_fn=collate_fn,
         num_workers=config.train.num_workers,
         pin_memory=True,
@@ -463,12 +538,17 @@ def main():
     model.eval()
 
     val_acc = evaluate_seq2seq_accuracy(model, val_loader, device)
-    print("==============evaluate_seq2seq_accuracy_with_repetition_penalty==============")
-    evaluate_seq2seq_accuracy_with_repetition_penalty(model, val_loader, device)
+    # print("==============evaluate_seq2seq_accuracy_with_repetition_penalty==============")
+    # evaluate_seq2seq_accuracy_with_repetition_penalty(model, val_loader, device)
+    print("==============evaluate_free_run_success_rate==============")
+    evaluate_free_run_success_rate(model, val_loader,sample_count=1000)
     # print("==============evaluate_seq2seq_accuracy_with_repetition_penalty_top_p==============")
     # evaluate_seq2seq_accuracy_with_repetition_penalty_top_p(model, val_loader, device, p=0.9)
     print(f"[Validation], Val_Acc={val_acc:.4f}")
 
 
 if __name__ == "__main__":
+    # {'U': 0, "U'": 1, 'U2': 2, 'D': 3, "D'": 4, 'D2': 5,
+    #  'L': 6, "L'": 7, 'L2': 8, 'R': 9, "R'": 10, 'R2': 11,
+    #  'F': 12,"F'": 13, 'F2': 14, 'B': 15, "B'": 16, 'B2': 17}
     main()
