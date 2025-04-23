@@ -285,7 +285,7 @@ def main_ddp():
         # 分布式训练时，每个 epoch 都要在 sampler 上设置一下随机种子
         train_sampler.set_epoch(epoch)
 
-        avg_loss = train_one_epoch_seq2seq(model, train_loader, optimizer, criterion, device, epoch, epochs)
+        avg_loss = train_one_epoch_seq2seq(model, train_loader, optimizer, criterion, device)
         scheduler.step()
         current_lr = scheduler.get_last_lr()[0]
 

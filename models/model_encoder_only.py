@@ -176,11 +176,6 @@ class RubikEncoderOnly(nn.Module):
         self.src_pos_embedding = SinusoidalPosEmb(d_model)
         # self.src_pos_embedding = nn.Embedding(max_seq_len, d_model)
 
-        # Decoder：对 move 索引进行嵌入，并加上位置编码
-        self.tgt_embedding = nn.Embedding(num_moves, d_model, padding_idx=PAD_TOKEN)
-        self.tgt_pos_embedding = SinusoidalPosEmb(d_model)
-        # self.tgt_pos_embedding = nn.Embedding(max_seq_len, d_model)
-
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
