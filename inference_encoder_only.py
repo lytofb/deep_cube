@@ -79,7 +79,7 @@ def evaluate_seq2seq_accuracy(model, dataloader, device):
         tgt = tgt.to(device)
 
         # 同训练方式 (Teacher forcing)
-        target_output = tgt[:, 0]  # 形状 (B, seq_len-1)
+        target_output = tgt[:, 1]  # 形状 (B, seq_len-1)
 
         logits = model(src)  # => (B, seq_len-1, num_moves)
         # 取 argmax => (B, seq_len-1)

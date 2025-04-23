@@ -53,7 +53,7 @@ def train_one_epoch_seq2seq(model, dataloader, optimizer, criterion, device):
         optimizer.zero_grad()
 
         # Teacher Forcing：外部切片
-        target_output = tgt[:, 0]   # (B,)
+        target_output = tgt[:, 1]   # (B,)
 
         # 使用混合后的输入进行前向传播，计算最终 loss
         with autocast(enabled=use_amp):
@@ -102,7 +102,7 @@ def evaluate_seq2seq_accuracy(model, dataloader, device):
         tgt = tgt.to(device)
 
         # 同训练方式 (Teacher forcing)
-        target_output = tgt[:, 0]   # (B,)
+        target_output = tgt[:, 1]   # (B,)
 
         logits = model(src)  # => (B, num_moves)
         # 取 argmax => (B, seq_len-1)
