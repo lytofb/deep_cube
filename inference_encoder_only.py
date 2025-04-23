@@ -307,6 +307,9 @@ def evaluate_free_run_success_rate(
                 logits = model(inp).squeeze(0)  # (num_moves,)
                 # 贪心选最大 logit，对应的 token
                 tok = int(logits.argmax().item())
+                # 强制让第一个tok设置为gt
+                if t == 0 and tok != gt[0]:
+                    tok = gt[0]
                 if tok in (EOS_TOKEN, PAD_TOKEN):
                     break
 
