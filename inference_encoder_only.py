@@ -1,4 +1,5 @@
 # inference_seq2seq.py
+import pickle
 
 import torch
 from torch.utils.data import DataLoader
@@ -271,6 +272,7 @@ def evaluate_free_run_success_rate(
     successes = 0
     seen = 0
     diff_start_counts = {}
+    first_mismatch_records = []
 
     for src_batch, tgt_batch in dataloader:
         batch_size = src_batch.size(0)
@@ -309,6 +311,12 @@ def evaluate_free_run_success_rate(
                 tok = int(logits.argmax().item())
                 # 强制让第一个tok设置为gt
                 if t == 0 and tok != gt[0]:
+                    first_mismatch_records.append({
+                        "gt": gt,
+                        "decoded": decoded,
+                        "predict": tok,
+                        "init_state": init_state
+                    })
                     tok = gt[0]
                 if tok in (EOS_TOKEN, PAD_TOKEN):
                     break
@@ -335,7 +343,7 @@ def evaluate_free_run_success_rate(
             break
 
     success_rate = successes / sample_count if sample_count > 0 else 0.0
-    return success_rate, diff_start_counts
+    return success_rate, diff_start_counts, first_mismatch_records
 
 @torch.no_grad()
 def evaluate_seq2seq_accuracy_with_repetition_penalty_top_p(
@@ -552,10 +560,12 @@ def main():
     # print("==============evaluate_seq2seq_accuracy_with_repetition_penalty==============")
     # evaluate_seq2seq_accuracy_with_repetition_penalty(model, val_loader, device)
     print("==============evaluate_free_run_success_rate==============")
-    success_rate, diff_start_counts = evaluate_free_run_success_rate(model, val_loader, device, sample_count=1000)
+    success_rate, diff_start_counts, first_mismatch_records = evaluate_free_run_success_rate(model, val_loader, device, sample_count=1000)
     print("========")
     print(success_rate)
     print(diff_start_counts)
+    with open("first_mismatch_records.pkl", "wb") as f:
+        pickle.dump(first_mismatch_records, f)
     # print("==============evaluate_seq2seq_accuracy_with_repetition_penalty_top_p==============")
     # evaluate_seq2seq_accuracy_with_repetition_penalty_top_p(model, val_loader, device, p=0.9)
     print(f"[Validation], Val_Acc={val_acc:.4f}")
