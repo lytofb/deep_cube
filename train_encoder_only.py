@@ -9,7 +9,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import random
-from utils import PAD_TOKEN,EOS_TOKEN,SOS_TOKEN
+from utils import PAD_TOKEN,EOS_TOKEN,SOS_TOKEN,FocalLoss
 
 
 from inference import iterative_greedy_decode_seq2seq, random_scramble_cube, beam_search
@@ -258,7 +258,8 @@ def main_ddp():
 
 
     # 3. Optimizer & Loss
-    criterion = nn.CrossEntropyLoss(ignore_index=PAD_TOKEN)
+    criterion = FocalLoss(ignore_index=PAD_TOKEN)
+    # criterion = nn.CrossEntropyLoss(ignore_index=PAD_TOKEN)
     optimizer = model.configure_optimizers(learning_rate=config.train.learning_rate,weight_decay=config.train.weight_decay)
     # optimizer = optim.Adam(model.parameters(), lr=config.train.learning_rate, weight_decay=config.train.weight_decay)
 

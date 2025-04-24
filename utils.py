@@ -3,6 +3,8 @@ import random
 
 import torch
 import pycuber as pc
+from torch import nn
+import torch.nn.functional as F
 
 # 常见颜色，如果需要可以加更多
 COLOR_CHARS = ['w', 'g', 'r', 'b', 'o', 'y']
@@ -144,7 +146,61 @@ def random_scramble_cube(steps=20):
         c(mv)
     return c, moves
 
+class FocalLoss(nn.Module):
+    """
+    Focal Loss，用于缓解类别不平衡。
+    loss = (1 - p_t)^gamma * CE(p_t)
+    支持 ignore_index 来忽略 padding 位置。
+    """
+    def __init__(self, gamma: float = 2.0, ignore_index: int = None, reduction: str = 'mean'):
+        """
+        Args:
+          gamma: 聚焦参数，gamma >= 0。gamma 越大，对简单样本的抑制越强。
+          ignore_index: 在 target 中，等于该值的位置不参与损失计算。
+          reduction: 'mean' 或 'sum' 或 'none'。
+        """
+        super().__init__()
+        self.gamma = gamma
+        self.ignore_index = ignore_index
+        self.reduction = reduction
+
+    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+          logits: (B, C) 或 (N, C) 预测分数
+          target: (B,) 或 (N,) 真实标签，标签值可为 0…C-1，也可为 ignore_index
+        Returns:
+          标量损失（如果 reduction!='none'）或与 target 同形的损失张量
+        """
+        # 1) 先计算每样本的交叉熵（不 reduction）
+        ce_loss = F.cross_entropy(
+            logits,
+            target,
+            reduction='none',
+            ignore_index=self.ignore_index
+        )  # (N,)
+
+        # 2) 计算 p_t = exp(-CE)
+        p_t = torch.exp(-ce_loss)
+
+        # 3) 计算 Focal Loss
+        loss = (1 - p_t) ** self.gamma * ce_loss  # (N,)
+
+        # 4) 如果指定了 ignore_index，要把对应位置移除
+        if self.ignore_index is not None:
+            valid_mask = (target != self.ignore_index)
+            loss = loss[valid_mask]
+
+        # 5) reduction
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:  # 'none'
+            return loss
+
 if __name__ == '__main__':
+    print(MOVE_TO_IDX)
     # cube,moves = random_scramble_cube(5)
     cube = pc.Cube()
     print(cube)
