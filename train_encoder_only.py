@@ -188,15 +188,15 @@ def main_ddp():
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
 
-    if dist.get_rank() == 0:
-        experiment = start(
-          api_key=config.comet.api_key,
-          project_name=config.comet.project_name,
-          workspace=config.comet.workspace
-        )
-        experiment.log_parameters(OmegaConf.to_container(config, resolve=True))
-        experiment.log_asset(file_data="models/model_history_transformer.py")
-        experiment.log_asset(file_data="dataset_rubik.py")
+    # if dist.get_rank() == 0:
+    #     experiment = start(
+    #       api_key=config.comet.api_key,
+    #       project_name=config.comet.project_name,
+    #       workspace=config.comet.workspace
+    #     )
+    #     experiment.log_parameters(OmegaConf.to_container(config, resolve=True))
+    #     experiment.log_asset(file_data="models/model_history_transformer.py")
+    #     experiment.log_asset(file_data="dataset_rubik.py")
 
     # 1. Dataset & DataLoader
     train_dataset = RubikDataset(data_dir=config.data.train_dir,
@@ -219,9 +219,9 @@ def main_ddp():
     weights   = inv_freq[torch.tensor(train_dataset.first_moves)]  # (N,)
 
     # ---------- 2. 使用自定义 DistributedWeightedSampler ----------
-    train_sampler = DistributedWeightedSampler(weights)
+    # train_sampler = DistributedWeightedSampler(weights)
     # 使用 DistributedSampler
-    # train_sampler = DistributedSampler(train_dataset)
+    train_sampler = DistributedSampler(train_dataset)
     val_sampler = DistributedSampler(val_dataset, shuffle=False)
 
     # 1) 先根据 config 创建一个 collate_fn
@@ -265,8 +265,8 @@ def main_ddp():
     )
     model.apply(init_weights)  # 新增：应用 He 初始化
     model = model.to(device)
-    if dist.get_rank() == 0:
-        log_model(experiment, model=model, model_name="TheModel")
+    # if dist.get_rank() == 0:
+    #     log_model(experiment, model=model, model_name="TheModel")
 
 
     # 3. Optimizer & Loss
@@ -351,9 +351,9 @@ def main_ddp():
                 torch.save(model.state_dict(), ckpt_path)
                 print(f"已保存模型到 {ckpt_path}")
 
-            experiment.log_metric("train_loss", avg_loss, step=epoch)
-            experiment.log_metric("lr", current_lr, step=epoch)
-            experiment.log_metric("val_accuracy", val_acc, step=epoch)
+            # experiment.log_metric("train_loss", avg_loss, step=epoch)
+            # experiment.log_metric("lr", current_lr, step=epoch)
+            # experiment.log_metric("val_accuracy", val_acc, step=epoch)
 
     # 最后再保存一次 (可选)
     torch.save(model.state_dict(), "rubik_model_final.pth")
