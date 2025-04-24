@@ -9,8 +9,9 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import random
-from utils import PAD_TOKEN,EOS_TOKEN,SOS_TOKEN,FocalLoss
 
+from sampler.distributed_weight_sampler import DistributedWeightedSampler
+from utils import PAD_TOKEN, EOS_TOKEN, SOS_TOKEN, FocalLoss, VOCAB_SIZE
 
 from inference import iterative_greedy_decode_seq2seq, random_scramble_cube, beam_search
 
@@ -208,8 +209,19 @@ def main_ddp():
                                history_len=config.data.max_history_len,
                                max_files=None)
 
+    # ---------- 1. 统计首步频次并计算倒频率 ----------
+    first_counts = torch.bincount(
+        torch.tensor(train_dataset.first_moves),
+        minlength=VOCAB_SIZE
+    ).double()                      # (C,)
+
+    inv_freq = 1.0 / (first_counts + 1e-8)   # 避免除 0
+    weights   = inv_freq[torch.tensor(train_dataset.first_moves)]  # (N,)
+
+    # ---------- 2. 使用自定义 DistributedWeightedSampler ----------
+    train_sampler = DistributedWeightedSampler(weights)
     # 使用 DistributedSampler
-    train_sampler = DistributedSampler(train_dataset)
+    # train_sampler = DistributedSampler(train_dataset)
     val_sampler = DistributedSampler(val_dataset, shuffle=False)
 
     # 1) 先根据 config 创建一个 collate_fn

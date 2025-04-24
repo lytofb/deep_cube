@@ -50,6 +50,9 @@ class RubikDataset(Dataset):
             # data_dir 为 None 时，继续使用原有的内存生成方式
             self.samples = []
             self._generate_in_memory(num_samples, min_scramble, max_scramble)
+        # === 新增：统计每个样本的首步标签，供后续重采样使用 ===
+        # self[i] 返回 (src_seq, tgt_seq)，其中 tgt_seq[0] 是首步标签
+        self.first_moves = [int(self[i][1][1]) for i in range(len(self))]
 
     def _generate_in_memory(self, num_samples, min_scramble, max_scramble):
         print(f"RubikSeqDataset: 正在内存中生成 {num_samples} 条数据...")
