@@ -337,6 +337,11 @@ class RubikEncoderOnly(nn.Module):
         src_positions = torch.arange(src.shape[0], device=src.device).unsqueeze(1)
         src = src + self.src_pos_embedding(src_positions)
 
+
+        # ---------- 扩展 padding mask：给 CLS 位置补 False ----------
+        cls_pad = torch.zeros((B, 1), dtype=torch.bool, device=src.device)    # (B, 1)
+        src_key_padding_mask = torch.cat([cls_pad, src_key_padding_mask], dim=1)  # (B, L+1)
+
         # --- NEW: 计算首个非 PAD 的位置标记（包括 CLS） ---
         # not_pad: (B, L+1)，首个非 PAD（或 CLS）对应的位置是 1，其它 0
         not_pad = (~src_key_padding_mask).int()  # 1 表示真实 token
@@ -350,9 +355,6 @@ class RubikEncoderOnly(nn.Module):
         # 在 Encoder 输入阶段也加个 Dropout
         src = self.src_emb_dropout(src)
 
-        # ---------- 扩展 padding mask：给 CLS 位置补 False ----------
-        cls_pad = torch.zeros((B, 1), dtype=torch.bool, device=src.device)    # (B, 1)
-        src_key_padding_mask = torch.cat([cls_pad, src_key_padding_mask], dim=1)  # (B, L+1)
 
         out = self.encoder(src,src_key_padding_mask = src_key_padding_mask)
 
