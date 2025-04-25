@@ -313,9 +313,9 @@ def evaluate_free_run_success_rate(
                 if t == 0 and tok != gt[0]:
                     first_mismatch_records.append({
                         "gt": gt,
-                        "decoded": decoded,
+                        "decoded": decoded.copy(),
                         "predict": tok,
-                        "init_state": init_state
+                        "init_state": init_state.cpu().tolist()
                     })
                     tok = gt[0]
                 if tok in (EOS_TOKEN, PAD_TOKEN):
