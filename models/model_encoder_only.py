@@ -160,6 +160,8 @@ class RubikEncoderOnly(nn.Module):
         self.max_seq_len = max_seq_len
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
+        # --- NEW: Prompt Embedding, 2 个索引 {0: 普通, 1: 首步} ---
+        self.prompt_embedding = nn.Embedding(2, d_model)
 
         # 1) 在输入 Embedding 上增加 Dropout
         self.src_emb_dropout = nn.Dropout(dropout)
