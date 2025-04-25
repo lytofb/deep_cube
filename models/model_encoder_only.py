@@ -225,6 +225,13 @@ class RubikEncoderOnly(nn.Module):
         # 输出层：将 Transformer 输出投影到 move 词汇表上
         self.fc_out = nn.Linear(d_model, num_moves)
 
+        # first_head：二层带激活的小 MLP
+        # self.fc_out = nn.Sequential(
+        #     nn.Linear(d_model, d_model // 2),
+        #     nn.ReLU(),
+        #     nn.Linear(d_model // 2, num_moves)
+        # )
+
     def get_optim_groups(self, weight_decay: float = 1e-3):
         """
         This long function is unfortunately doing something very simple and is being very defensive:
@@ -327,6 +334,16 @@ class RubikEncoderOnly(nn.Module):
         src = torch.cat([cls_tok, src], dim=0)               # (L+1, B, d_model)
         src_positions = torch.arange(src.shape[0], device=src.device).unsqueeze(1)
         src = src + self.src_pos_embedding(src_positions)
+
+        # --- NEW: 计算首个非 PAD 的位置标记（包括 CLS） ---
+        # not_pad: (B, L+1)，首个非 PAD（或 CLS）对应的位置是 1，其它 0
+        not_pad = (~src_key_padding_mask).int()  # 1 表示真实 token
+        first_flag = (not_pad.cumsum(dim=1) == 1).long()  # (B, L+1)
+        # 转成 (L+1, B) 供 Embedding lookup
+        prompt_ids = first_flag.transpose(0, 1)  # (L+1, B)
+        prompt_emb = self.prompt_embedding(prompt_ids)  # (L+1, B, d_model)
+        # 把 prompt embedding 加回 src
+        src = src + prompt_emb
 
         # 在 Encoder 输入阶段也加个 Dropout
         src = self.src_emb_dropout(src)
