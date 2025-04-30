@@ -219,9 +219,9 @@ def main_ddp():
     weights   = inv_freq[torch.tensor(train_dataset.first_moves)]  # (N,)
 
     # ---------- 2. 使用自定义 DistributedWeightedSampler ----------
-    # train_sampler = DistributedWeightedSampler(weights)
+    train_sampler = DistributedWeightedSampler(weights)
     # 使用 DistributedSampler
-    train_sampler = DistributedSampler(train_dataset)
+    # train_sampler = DistributedSampler(train_dataset)
     val_sampler = DistributedSampler(val_dataset, shuffle=False)
 
     # 1) 先根据 config 创建一个 collate_fn
@@ -265,6 +265,22 @@ def main_ddp():
     )
     model.apply(init_weights)  # 新增：应用 He 初始化
     model = model.to(device)
+
+    # ===== 冻结 prompt_alpha 与 pos_alpha =====
+    # model.prompt_alpha.requires_grad_(False)
+    # model.pos_alpha.requires_grad_(True)
+
+    # ===== (可选) 继续训练 / 预加载已有权重  =====
+    # 在 config.yaml 里加一行，例如:
+    # train:
+    #   resume_ckpt: "rubik_model_best.pth"   # 为空则不加载
+    ckpt_path = config.train.get("resume_ckpt", "")
+    if ckpt_path and os.path.isfile(ckpt_path):
+        map_loc = {"cuda:0": f"cuda:{local_rank}"}          # 处理多卡路径
+        state_dict = torch.load(ckpt_path, map_location=map_loc)
+        model.load_state_dict(state_dict, strict=True)
+        if dist.get_rank() == 0:
+            print(f"[Resume] loaded weights from {ckpt_path}")
     # if dist.get_rank() == 0:
     #     log_model(experiment, model=model, model_name="TheModel")
 

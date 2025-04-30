@@ -163,12 +163,14 @@ class RubikEncoderOnly(nn.Module):
         # --- NEW: Prompt Embedding, 2 个索引 {0: 普通, 1: 首步} ---
         self.prompt_embedding = nn.Embedding(2, d_model)
 
+        self.prompt_alpha = nn.Parameter(torch.tensor(0.0))
+        self.pos_alpha = nn.Parameter(torch.tensor(1.0))
+
+        # __init__
+        # self.prompt_film = nn.Linear(d_model, 2 * d_model)  # 生成 γ,β
+
         # 1) 在输入 Embedding 上增加 Dropout
         self.src_emb_dropout = nn.Dropout(dropout)
-        self.tgt_emb_dropout = nn.Dropout(dropout)
-
-        # 2) 对 Encoder/Decoder 的输出增加 Dropout（原有的 dropout1 也可保留）
-        self.dropout1 = nn.Dropout(dropout)
 
 
         # Encoder：对魔方状态进行线性映射，然后加上位置编码
@@ -225,14 +227,15 @@ class RubikEncoderOnly(nn.Module):
 
         self.ln_f = nn.LayerNorm(d_model)
         # 输出层：将 Transformer 输出投影到 move 词汇表上
-        self.fc_out = nn.Linear(d_model, num_moves)
+        # self.fc_out = nn.Linear(d_model, num_moves)
 
         # first_head：二层带激活的小 MLP
-        # self.fc_out = nn.Sequential(
-        #     nn.Linear(d_model, d_model // 2),
-        #     nn.ReLU(),
-        #     nn.Linear(d_model // 2, num_moves)
-        # )
+        self.fc_out = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.Dropout(0.2),
+            nn.Linear(d_model, num_moves)
+        )
 
     def get_optim_groups(self, weight_decay: float = 1e-3):
         """
@@ -265,7 +268,10 @@ class RubikEncoderOnly(nn.Module):
                     no_decay.add(fpn)
 
         # special case the position embedding parameter in the root GPT module as not decayed
+        # no_decay.add("prompt_film")
         no_decay.add("cls_token")
+        no_decay.add("prompt_alpha")
+        no_decay.add("pos_alpha")
         # no_decay.add("_dummy_variable")
         # if self.cond_pos_emb is not None:
         #     no_decay.add("cond_pos_emb")
@@ -335,7 +341,8 @@ class RubikEncoderOnly(nn.Module):
         cls_tok = self.cls_token.expand(1, B, -1)            # (1, B, d_model)
         src = torch.cat([cls_tok, src], dim=0)               # (L+1, B, d_model)
         src_positions = torch.arange(src.shape[0], device=src.device).unsqueeze(1)
-        src = src + self.src_pos_embedding(src_positions)
+        pos_emb = self.src_pos_embedding(src_positions)
+        src = src + self.pos_alpha * pos_emb
 
 
         # ---------- 扩展 padding mask：给 CLS 位置补 False ----------
@@ -345,12 +352,19 @@ class RubikEncoderOnly(nn.Module):
         # --- NEW: 计算首个非 PAD 的位置标记（包括 CLS） ---
         # not_pad: (B, L+1)，首个非 PAD（或 CLS）对应的位置是 1，其它 0
         not_pad = (~src_key_padding_mask).int()  # 1 表示真实 token
-        first_flag = (not_pad.cumsum(dim=1) == 1).long()  # (B, L+1)
+        first_flag = (not_pad.cumsum(dim=1) == 2).long()  # (B, L+1)
         # 转成 (L+1, B) 供 Embedding lookup
         prompt_ids = first_flag.transpose(0, 1)  # (L+1, B)
         prompt_emb = self.prompt_embedding(prompt_ids)  # (L+1, B, d_model)
+
+        # forward 中，先算出 prompt_emb as before (L+1, B, d_model)
+        # 然后
+        # film = self.prompt_film(prompt_emb)  # (L+1, B, 2*d_model)
+        # gamma, beta = film.chunk(2, dim=-1)  # 各 (L+1, B, d_model)
+        # src = src * (1 + gamma) + beta
+
         # 把 prompt embedding 加回 src
-        src = src + prompt_emb
+        src = src + self.prompt_alpha * prompt_emb
 
         # 在 Encoder 输入阶段也加个 Dropout
         src = self.src_emb_dropout(src)
@@ -388,7 +402,7 @@ if __name__ == "__main__":
     # plt.xlabel("输出维度")
     # plt.ylabel("输入维度")
     # plt.show()
-
+    print(model)
     src = torch.randint(0,22,(B, src_seq_len, input_dim))
 
     logits = model(src)  # (B, tgt_seq_len, num_moves)
