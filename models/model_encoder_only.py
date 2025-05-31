@@ -5,6 +5,9 @@ from models.positional_embedding import SinusoidalPosEmb
 from utils import PAD_TOKEN,VOCAB_SIZE
 from typing import Union, Optional, Tuple
 
+import math, types
+import torch.nn.functional as F
+
 class SrcEmbeddingSeparate(nn.Module):
     def __init__(self, vocab_size, d_model, input_dim):
         """
@@ -123,6 +126,47 @@ class SrcLinearModel(nn.Module):
         out = self.activation(out)
         return out
 
+### <<< NEW / MODIFY >>>  (2)  LoRA 低秩线性层
+class LoRALinear(nn.Module):
+    """
+    将已有 nn.Linear 替换为带可训练 LoRA 分支的线性层。
+    公式:  y = Wx + (α/r)·B(Ax)  （W = 原权重，A↓r，B↑）
+    """
+    def __init__(self, base: nn.Linear, r: int = 8, alpha: int = 16, dropout: float = 0.0):
+        super().__init__()
+        self.base = base                          # 原线性层（冻结 or 不冻结按需控制）
+        self.r = r
+        self.scaling = alpha / r
+        self.lora_down = nn.Linear(base.in_features, r, bias=False)
+        self.lora_up   = nn.Linear(r, base.out_features, bias=False)
+        nn.init.kaiming_uniform_(self.lora_down.weight, a=math.sqrt(5))
+        nn.init.zeros_(self.lora_up.weight)
+        self.dropout = nn.Dropout(dropout)
+
+    @property
+    def weight(self):
+        # 方便 weight_decay 判断
+        return self.base.weight
+
+    def forward(self, x):
+        return self.base(x) + self.scaling * self.lora_up(self.lora_down(self.dropout(x)))
+
+### <<< NEW / MODIFY >>>  (3)  Bottleneck Adapter
+class Adapter(nn.Module):
+    """
+    简单的 Bottleneck Adapter：x + Dropout(Up(GELU(Down(x))))
+    """
+    def __init__(self, hidden_dim: int, bottleneck_dim: int = 32, dropout: float = 0.1):
+        super().__init__()
+        self.down = nn.Linear(hidden_dim, bottleneck_dim)
+        self.act  = nn.GELU()
+        self.up   = nn.Linear(bottleneck_dim, hidden_dim)
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, x):
+        return x + self.drop(self.up(self.act(self.down(x))))
+
+
 class RubikEncoderOnly(nn.Module):
     """
     该模型用于学习从魔方状态序列到还原 move 序列的映射。
@@ -135,6 +179,32 @@ class RubikEncoderOnly(nn.Module):
       - logits: 预测每个时间步的 move 分布，形状 (B, tgt_seq_len, num_moves)
     """
 
+    ### <<< NEW / MODIFY >>>  (6)  注入 LoRA 的递归函数
+    def _inject_lora(self, module: nn.Module, r: int = 8, alpha: int = 16):
+        """
+        递归地把 module 里所有 nn.Linear 替换成 LoRALinear。
+        """
+        for name, child in list(module.named_children()):  # list() 防止迭代时修改
+            if isinstance(child, nn.Linear):
+                setattr(module, name, LoRALinear(child, r=r, alpha=alpha))
+            else:
+                self._inject_lora(child, r=r, alpha=alpha)
+
+    ### <<< NEW / MODIFY >>>  (7)  给 Encoder 每一层打 Adapter「补丁」
+    def _add_adapters(self, bottleneck_dim: int = 32):
+        """
+        给 TransformerEncoder 每层打 Adapter 补丁，保持原 forward 签名。
+        """
+        for layer in self.encoder.layers:  # type: nn.TransformerEncoderLayer
+            layer.adapter = Adapter(self.d_model, bottleneck_dim)
+            old_forward = layer.forward
+
+            def forward_with_adapter(self_layer, src, *args, **kwargs):
+                out = old_forward(src, *args, **kwargs)
+                return self_layer.adapter(out)
+
+            layer.forward = forward_with_adapter.__get__(layer, layer.__class__)
+
     def __init__(self,
                  input_dim=55,
                  d_model=128,
@@ -143,6 +213,12 @@ class RubikEncoderOnly(nn.Module):
                  num_moves=VOCAB_SIZE,
                  max_seq_len=50,
                  dropout = 0.3,
+                 # ---- 新增 ----
+                 use_lora: bool = False,
+                 lora_r: int = 8,
+                 lora_alpha: int = 16,
+                 use_adapter: bool = False,
+                 adapter_dim: int = 32,
                  ):
         """
         Args:
@@ -154,6 +230,12 @@ class RubikEncoderOnly(nn.Module):
             max_seq_len: 序列的最大长度，用于位置编码
         """
         super().__init__()
+        self.use_lora     = use_lora
+        self.lora_r       = lora_r
+        self.lora_alpha   = lora_alpha
+        self.use_adapter  = use_adapter
+        self.adapter_dim  = adapter_dim
+
         self.input_dim = input_dim
         self.d_model = d_model
         self.num_moves = num_moves
@@ -193,6 +275,18 @@ class RubikEncoderOnly(nn.Module):
             encoder_layer=encoder_layer,
             num_layers=num_layers
         )
+
+        # ---------- 注入 Bottleneck Adapter ----------
+        if self.use_adapter:
+            self._add_adapters(self.adapter_dim)
+
+        # ---------- 注入 LoRA ----------
+        if self.use_lora:
+            self._inject_lora(self.encoder, r=self.lora_r, alpha=self.lora_alpha)
+            # 如还想在输出 MLP 里也用 LoRA，可解开下面一行
+            # self._inject_lora(self.fc_out, r=self.lora_r, alpha=self.lora_alpha)
+
+
 
         # self.encoder = nn.Sequential(
         #     nn.Linear(d_model, 4 * d_model),
@@ -249,7 +343,10 @@ class RubikEncoderOnly(nn.Module):
         decay = set()
         no_decay = set()
         whitelist_weight_modules = (torch.nn.Linear, torch.nn.MultiheadAttention)
-        blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
+        blacklist_weight_modules = (torch.nn.LayerNorm,
+                                    torch.nn.Embedding,
+                                    Adapter,  # NEW
+                                    LoRALinear)  # NEW
         for mn, m in self.named_modules():
             for pn, p in m.named_parameters():
                 fpn = "%s.%s" % (mn, pn) if mn else pn  # full param name
