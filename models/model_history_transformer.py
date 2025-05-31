@@ -5,6 +5,9 @@ from models.positional_embedding import SinusoidalPosEmb
 from utils import PAD_TOKEN,VOCAB_SIZE
 from typing import Union, Optional, Tuple
 
+### <<< 新增 / 修改 >>>
+import math
+
 class SrcEmbeddingSeparate(nn.Module):
     def __init__(self, vocab_size, d_model, input_dim):
         """
@@ -123,6 +126,77 @@ class SrcLinearModel(nn.Module):
         out = self.activation(out)
         return out
 
+### <<< 新增 / 修改 >>>
+class BottleneckAdapter(nn.Module):
+    """最常用的下采样-上采样 Bottleneck Adapter"""
+    def __init__(self, d_model: int, bottleneck_dim: int = 32, dropout: float = 0.1):
+        super().__init__()
+        self.down = nn.Linear(d_model, bottleneck_dim, bias=False)
+        self.nonlin = nn.GELU()
+        self.up   = nn.Linear(bottleneck_dim, d_model, bias=False)
+        self.dropout = nn.Dropout(dropout)
+        # 令 Adapter 初始为近似恒等映射
+        nn.init.zeros_(self.up.weight)
+
+    def forward(self, x):
+        residual = x
+        x = self.down(x)
+        x = self.nonlin(x)
+        x = self.dropout(x)
+        x = self.up(x)
+        return residual + x
+
+
+class LoRALinear(nn.Module):
+    """
+    将 LoRA 注入到任意 nn.Linear 中
+    原始权重被冻结，只训练低秩 (A,B) 两个矩阵
+    """
+    def __init__(self, orig_linear: nn.Linear, r: int = 8, alpha: int = 16):
+        super().__init__()
+        self.orig = orig_linear
+        self.r = r
+        self.alpha = alpha
+        self.scaling = alpha / r
+
+        self.A = nn.Linear(orig_linear.in_features, r,  bias=False)
+        self.B = nn.Linear(r,                     orig_linear.out_features, bias=False)
+
+        # 建议初始化：A 随机、B 为 0，保持“近似恒等”
+        nn.init.kaiming_uniform_(self.A.weight, a=math.sqrt(5))
+        nn.init.zeros_(self.B.weight)
+
+        # 冻结原始权重
+        for p in self.orig.parameters():
+            p.requires_grad = False
+
+    # 让外部能访问到 weight / bias
+    @property
+    def weight(self):
+        return self.orig.weight
+
+    @property
+    def bias(self):
+        return self.orig.bias
+
+    def forward(self, x):
+        return self.orig(x) + self.B(self.A(x)) * self.scaling
+
+### <<< 新增 / 修改 >>>
+class DecoderLayerWithAdapter(nn.TransformerDecoderLayer):
+    """在标准 DecoderLayer 末尾串联一个 Bottleneck Adapter"""
+    def __init__(self,
+                 *args,
+                 adapter_dim: int = 32,
+                 adapter_dropout: float = 0.1,
+                 **kwargs):
+        super().__init__(*args, **kwargs)
+        self.adapter = BottleneckAdapter(kwargs['d_model'], adapter_dim, adapter_dropout)
+
+    def forward(self, *args, **kwargs):
+        x = super().forward(*args, **kwargs)   # (tgt_len, B, d_model)
+        return self.adapter(x)
+
 class RubikSeq2SeqTransformer(nn.Module):
     """
     该模型用于学习从魔方状态序列到还原 move 序列的映射。
@@ -143,6 +217,10 @@ class RubikSeq2SeqTransformer(nn.Module):
                  num_moves=VOCAB_SIZE,
                  max_seq_len=50,
                  dropout = 0.3,
+                 # ↓↓↓  新增三个超参  ↓↓↓
+                 adapter_dim: int = 32,
+                 lora_r: int = 8,
+                 lora_alpha: int = 16,
                  ):
         """
         Args:
@@ -199,20 +277,26 @@ class RubikSeq2SeqTransformer(nn.Module):
             nn.Linear(4 * d_model, d_model)
         )
 
-        # decoder
-        decoder_layer = nn.TransformerDecoderLayer(
+        # ---------- Decoder ---------- #
+        decoder_layer = DecoderLayerWithAdapter(
             d_model=d_model,
             nhead=nhead,
             dim_feedforward=4 * d_model,
             dropout=dropout,
             activation='gelu',
             batch_first=False,
-            norm_first=True  # important for stability
+            norm_first=True,
+            # 传递 Adapter 超参
+            adapter_dim=adapter_dim,
+            adapter_dropout=dropout,
         )
         self.decoder = nn.TransformerDecoder(
             decoder_layer=decoder_layer,
             num_layers=num_layers
         )
+
+        # ===== 在 decoder 中注入 LoRA =====
+        self._inject_lora(self.decoder, r=lora_r, alpha=lora_alpha)
 
         # Transformer 模型（包含 Encoder 和 Decoder）
         # self.transformer = nn.Transformer(
@@ -299,6 +383,18 @@ class RubikSeq2SeqTransformer(nn.Module):
             optim_groups, lr=learning_rate, betas=betas
         )
         return optimizer
+
+    ### <<< 新增 / 修改 >>>
+    def _inject_lora(self, module: nn.Module, r: int = 8, alpha: int = 16):
+        """
+        递归地把 module 里所有 nn.Linear 替换成 LoRALinear
+        注意：如果想只在 Attention 或 FFN 中启用，可在 if 条件里筛选名字
+        """
+        for name, child in list(module.named_children()):  # list() 防递归时修改报错
+            if isinstance(child, nn.Linear):
+                setattr(module, name, LoRALinear(child, r=r, alpha=alpha))
+            else:
+                self._inject_lora(child, r=r, alpha=alpha)
 
     def generate_square_subsequent_mask(self, sz):
         """
