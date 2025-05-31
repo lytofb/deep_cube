@@ -143,10 +143,14 @@ class LoRALinear(nn.Module):
         nn.init.zeros_(self.lora_up.weight)
         self.dropout = nn.Dropout(dropout)
 
+    # 让外部能访问到 weight / bias
     @property
     def weight(self):
-        # 方便 weight_decay 判断
         return self.base.weight
+
+    @property
+    def bias(self):
+        return self.base.bias
 
     def forward(self, x):
         return self.base(x) + self.scaling * self.lora_up(self.lora_down(self.dropout(x)))
@@ -486,7 +490,7 @@ if __name__ == "__main__":
     input_dim = 55
     num_moves = VOCAB_SIZE
 
-    model = RubikEncoderOnly(input_dim=input_dim, num_moves=num_moves)
+    model = RubikEncoderOnly(input_dim=input_dim, num_moves=num_moves, use_lora = True, use_adapter=True)
     # state_dict = model.state_dict()
     # 假设我们已选取了某层的 weight
     # weight_matrix = state_dict['decoder.layers.0.self_attn.in_proj_weight'].cpu().numpy()
