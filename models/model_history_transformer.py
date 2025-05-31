@@ -187,11 +187,18 @@ class DecoderLayerWithAdapter(nn.TransformerDecoderLayer):
     """在标准 DecoderLayer 末尾串联一个 Bottleneck Adapter"""
     def __init__(self,
                  *args,
+                 use_adapter: bool = True,  # <-- 新增
                  adapter_dim: int = 32,
                  adapter_dropout: float = 0.1,
                  **kwargs):
         super().__init__(*args, **kwargs)
-        self.adapter = BottleneckAdapter(kwargs['d_model'], adapter_dim, adapter_dropout)
+        if use_adapter:
+            # 真正加一个 Bottleneck Adapter
+            d_model =  kwargs["d_model"]
+            self.adapter = BottleneckAdapter(d_model, adapter_dim, adapter_dropout)
+        else:
+            # 什么都不做，恒等映射
+            self.adapter = nn.Identity()
 
     def forward(self, *args, **kwargs):
         x = super().forward(*args, **kwargs)   # (tgt_len, B, d_model)
@@ -221,6 +228,9 @@ class RubikSeq2SeqTransformer(nn.Module):
                  adapter_dim: int = 32,
                  lora_r: int = 8,
                  lora_alpha: int = 16,
+                 # === 新增 ===
+                 use_adapter: bool = True,
+                 use_lora: bool = False,
                  ):
         """
         Args:
@@ -232,6 +242,8 @@ class RubikSeq2SeqTransformer(nn.Module):
             max_seq_len: 序列的最大长度，用于位置编码
         """
         super().__init__()
+        self.use_adapter = use_adapter
+        self.use_lora   = use_lora
         self.input_dim = input_dim
         self.d_model = d_model
         self.num_moves = num_moves
@@ -286,6 +298,7 @@ class RubikSeq2SeqTransformer(nn.Module):
             activation='gelu',
             batch_first=False,
             norm_first=True,
+            use_adapter=self.use_adapter,  # <-- 关键
             # 传递 Adapter 超参
             adapter_dim=adapter_dim,
             adapter_dropout=dropout,
@@ -295,8 +308,9 @@ class RubikSeq2SeqTransformer(nn.Module):
             num_layers=num_layers
         )
 
-        # ===== 在 decoder 中注入 LoRA =====
-        self._inject_lora(self.decoder, r=lora_r, alpha=lora_alpha)
+        # ===== 在 decoder 中按需注入 LoRA =====
+        if self.use_lora:
+            self._inject_lora(self.decoder, r=lora_r, alpha=lora_alpha)
 
         # Transformer 模型（包含 Encoder 和 Decoder）
         # self.transformer = nn.Transformer(
@@ -476,6 +490,18 @@ if __name__ == "__main__":
     num_moves = VOCAB_SIZE
 
     model = RubikSeq2SeqTransformer(input_dim=input_dim, num_moves=num_moves)
+    # 只用 Adapter
+    # model = RubikSeq2SeqTransformer(input_dim=input_dim, num_moves=num_moves, use_adapter=True, use_lora=False)
+
+    # # 只用 LoRA
+    # model = RubikSeq2SeqTransformer(input_dim=input_dim, num_moves=num_moves, use_adapter=False, use_lora=True)
+    #
+    # # 两者都不用（纯 Transformer）
+    # model = RubikSeq2SeqTransformer(input_dim=input_dim, num_moves=num_moves, use_adapter=False, use_lora=False)
+    #
+    # # 同时启用 Adapter + LoRA（如果你觉得可行）
+    # model = RubikSeq2SeqTransformer(input_dim=input_dim, num_moves=num_moves, use_adapter=True, use_lora=True)
+
     # state_dict = model.state_dict()
     # 假设我们已选取了某层的 weight
     # weight_matrix = state_dict['decoder.layers.0.self_attn.in_proj_weight'].cpu().numpy()
