@@ -508,6 +508,39 @@ class RubikEncoderOnly(nn.Module):
         )
         return optimizer
 
+    def configure_lora_optimizers(
+            self,
+            learning_rate: float = 1e-3,  # LoRA 通常学习率更高
+            weight_decay: float = 1e-2,
+            betas: Tuple[float, float] = (0.9, 0.95)):
+        """
+        只优化 requires_grad=True 的参数。
+        - LoRA / bias 不做权重衰减
+        - 其余可选 weight_decay
+        """
+
+        decay, no_decay = [], []
+
+        for name, param in self.named_parameters():
+            if not param.requires_grad:
+                continue  # 冻结的层直接跳过
+            # LoRA 层或 bias / LayerNorm 等 -> no_decay
+            if "lora_" in name or name.endswith("bias") or param.ndim == 1:
+                no_decay.append(param)
+            else:
+                decay.append(param)
+
+        optim_groups = [
+            {"params": decay, "weight_decay": weight_decay},
+            {"params": no_decay, "weight_decay": 0.0},
+        ]
+
+        optimizer = torch.optim.AdamW(
+            optim_groups, lr=learning_rate, betas=betas
+        )
+        return optimizer
+
+
     def generate_square_subsequent_mask(self, sz):
         """
         生成 tgt 的因果掩码，防止 decoder 看到未来信息
