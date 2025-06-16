@@ -1,0 +1,41 @@
+# config.yaml
+data:
+  train_dir: "rubik_kociemba_500k"
+  val_dir: "rubik_val_kociemba_shards"
+  num_samples: 1000
+  max_history_len: 8
+train:
+  batch_size: 2048
+  num_workers: 8
+  prefetch_factor: 4
+  learning_rate: 1e-3    # LoRA 一般学习率可设高一点
+  weight_decay: 1e-6
+  warmup_epochs: 10
+  max_epochs: 300
+  early_stop_patience: 10
+  resume_ckpt: "rubik_model_final.pth"   # ← 加载基座
+  # 可选：只训练 LoRA 时可关闭 AMP 或调低 batch size
+  use_amp: false
+model:
+  input_dim: 55
+  d_model: 768
+  num_layers: 6
+  nhead: 8
+  num_moves: 22
+  max_seq_len: 50
+  dropout: 0.4
+  # 开启 LoRA
+  use_lora: true          # ← 关键
+  lora_r: 8
+  lora_alpha: 16
+  # 其余 PETL 组件保持关闭
+  use_adapter: false
+  use_vq: false
+comet:
+  api_key: "Kneh4rDqtRHtLmTN6AvhSShWA"
+  project_name: "deepcube"
+  workspace: "lytofb"
+inference:
+  model_path: "rubik_model_best.pth"
+  scramble_steps: 8
+  max_len: 50

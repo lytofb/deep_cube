@@ -255,13 +255,28 @@ def main_ddp():
 
     # 2. Model
     model = RubikEncoderOnly(
+        # ======== 原本就有的超参 ========
         num_layers=config.model.num_layers,
         d_model=config.model.d_model,
         input_dim=config.model.input_dim,
         nhead=config.model.nhead,
         num_moves=config.model.num_moves,
         max_seq_len=config.model.max_seq_len,
-        dropout=config.model.dropout
+        dropout=config.model.dropout,
+
+        # ======== 新增：LoRA ============
+        use_lora=config.model.get("use_lora", False),
+        lora_r=config.model.get("lora_r", 8),
+        lora_alpha=config.model.get("lora_alpha", 16),
+
+        # ======== 新增：Adapter =========
+        use_adapter=config.model.get("use_adapter", False),
+        adapter_dim=config.model.get("adapter_dim", 32),
+
+        # ======== 新增：VQ Embedding ====
+        use_vq=config.model.get("use_vq", False),
+        vq_codebook_size=config.model.get("vq_codebook_size", 512),
+        vq_commitment_cost=config.model.get("vq_commitment_cost", 0.25),
     )
     model.apply(init_weights)  # 新增：应用 He 初始化
     model = model.to(device)
@@ -288,8 +303,13 @@ def main_ddp():
     # 3. Optimizer & Loss
     criterion = FocalLoss(ignore_index=PAD_TOKEN)
     # criterion = nn.CrossEntropyLoss(ignore_index=PAD_TOKEN)
-    optimizer = model.configure_optimizers(learning_rate=config.train.learning_rate,weight_decay=config.train.weight_decay)
-    # optimizer = optim.Adam(model.parameters(), lr=config.train.learning_rate, weight_decay=config.train.weight_decay)
+    use_lora = config.model.get("use_lora", False)
+    if not use_lora:
+        optimizer = model.configure_optimizers(learning_rate=config.train.learning_rate,
+                                               weight_decay=config.train.weight_decay)
+    else:
+        optimizer = model.configure_lora_optimizers(learning_rate=config.train.learning_rate,
+                                               weight_decay=config.train.weight_decay)
 
     eta_min = 1/3*config.train.learning_rate
     scheduler = LinearWarmupCosineAnnealingLR(
