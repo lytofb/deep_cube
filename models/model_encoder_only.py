@@ -211,9 +211,13 @@ class LoRALinear(nn.Module):
     将已有 nn.Linear 替换为带可训练 LoRA 分支的线性层。
     公式:  y = Wx + (α/r)·B(Ax)  （W = 原权重，A↓r，B↑）
     """
-    def __init__(self, base: nn.Linear, r: int = 8, alpha: int = 16, dropout: float = 0.0):
+    def __init__(self, base: nn.Linear, r: int = 8, alpha: int = 16, dropout: float = 0.0,
+                 freeze_base: bool = True):
         super().__init__()
         self.base = base                          # 原线性层（冻结 or 不冻结按需控制）
+        if freeze_base:                 # **可选：自动冻结基座**
+            for p in self.base.parameters():
+                p.requires_grad = False
         self.r = r
         self.scaling = alpha / r
         self.lora_down = nn.Linear(base.in_features, r, bias=False)
@@ -263,15 +267,15 @@ class RubikEncoderOnly(nn.Module):
     """
 
     ### <<< NEW / MODIFY >>>  (6)  注入 LoRA 的递归函数
-    def _inject_lora(self, module: nn.Module, r: int = 8, alpha: int = 16):
+    def _inject_lora(self, module: nn.Module, r: int = 8, alpha: int = 16, freeze_base=True):
         """
         递归地把 module 里所有 nn.Linear 替换成 LoRALinear。
         """
         for name, child in list(module.named_children()):  # list() 防止迭代时修改
             if isinstance(child, nn.Linear):
-                setattr(module, name, LoRALinear(child, r=r, alpha=alpha))
+                setattr(module, name, LoRALinear(child, r, alpha, freeze_base=freeze_base))
             else:
-                self._inject_lora(child, r=r, alpha=alpha)
+                self._inject_lora(child, r, alpha, freeze_base)
 
     ### <<< NEW / MODIFY >>>  (7)  给 Encoder 每一层打 Adapter「补丁」
     def _add_adapters(self, bottleneck_dim: int = 32):
